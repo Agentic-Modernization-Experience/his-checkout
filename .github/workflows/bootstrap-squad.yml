@@ -1,0 +1,218 @@
+name: Bootstrap Agent Squad
+
+on:
+  workflow_dispatch:
+    inputs:
+      org_login:
+        description: 'GitHub Organization login'
+        required: true
+      project_number:
+        description: 'GitHub Project V2 number'
+        required: true
+      project_url:
+        description: 'GitHub Project URL (e.g. https://github.com/orgs/ORG/projects/N)'
+        required: true
+      kb_type:
+        description: 'Knowledge base type'
+        required: false
+        default: 'local'
+        type: choice
+        options:
+          - local
+          - copilot-space
+      kb_name:
+        description: 'Knowledge base name'
+        required: false
+        default: 'Local Knowledge Base'
+      kb_url:
+        description: 'Knowledge base URL or local path'
+        required: false
+        default: '.github/knowledge-base'
+      sync_labels:
+        description: 'Sync labels from templates-mapping.json?'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      copilot_pr_author:
+        description: 'Login shown on Copilot PRs (default: Copilot)'
+        required: false
+        default: 'Copilot'
+      project_status_field:
+        description: 'Status field name in Project V2 (default: Status)'
+        required: false
+        default: 'Status'
+      template_profile:
+        description: 'Template profile to use (default, or custom profile name)'
+        required: false
+        default: 'default'
+      trigger_label:
+        description: 'Trigger label for the workflow (label that activates agent automation on issues)'
+        required: false
+        default: 'squad'
+      create_first_issue:
+        description: 'Create the first phase issue automatically?'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      status_todo:
+        description: 'Project status value for new items (default: Todo)'
+        required: false
+        default: 'Todo'
+      status_wip:
+        description: 'Project status value for work in progress (default: In Progress)'
+        required: false
+        default: 'In Progress'
+      status_review:
+        description: 'Project status value for review (default: Review)'
+        required: false
+        default: 'Review'
+      status_done:
+        description: 'Project status value for completed items (default: Done)'
+        required: false
+        default: 'Done'
+
+permissions:
+  issues: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate squad-config.json
+        run: |
+          cat > .github/squad-config.json << 'ENDOFCONFIG'
+          {
+            "org_login": "${{ inputs.org_login }}",
+            "project_number": ${{ inputs.project_number }},
+            "project_url": "${{ inputs.project_url }}",
+            "knowledge_base": {
+              "type": "${{ inputs.kb_type }}",
+              "name": "${{ inputs.kb_name }}",
+              "url": "${{ inputs.kb_url }}",
+              "local_path": ".github/knowledge-base"
+            },
+            "labels": {
+              "wip": "AI-AGENT_WIP",
+              "review": "AI-AGENT_REVIEW",
+              "trigger": "${{ inputs.trigger_label }}"
+            },
+            "copilot_bot_login": "copilot-swe-agent",
+            "copilot_pr_author": "${{ inputs.copilot_pr_author }}",
+            "project_status_field": "${{ inputs.project_status_field }}",
+            "project_status_values": {
+              "todo": "${{ inputs.status_todo }}",
+              "wip": "${{ inputs.status_wip }}",
+              "review": "${{ inputs.status_review }}",
+              "done": "${{ inputs.status_done }}"
+            },
+            "human_reviewers": [],
+            "wip_timeout_hours": 24,
+            "template_profile": "${{ inputs.template_profile }}",
+            "template_vars": {},
+            "workspaces": {
+              "source": {
+                "label": "",
+                "paths": {}
+              },
+              "target": {
+                "label": "",
+                "paths": {}
+              }
+            }
+          }
+          ENDOFCONFIG
+          echo "Squad config generated:"
+          cat .github/squad-config.json
+
+      - name: Commit squad-config.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Scaffold copilot-instructions.md from template if it doesn't exist
+          if [[ ! -f ".github/copilot-instructions.md" ]] && [[ -f ".github/templates/copilot-instructions.template.md" ]]; then
+            cp .github/templates/copilot-instructions.template.md .github/copilot-instructions.md
+            git add .github/copilot-instructions.md
+            echo "copilot-instructions.md scaffolded from template"
+          fi
+
+          git add .github/squad-config.json
+          git diff --cached --quiet && echo "No changes to commit" || \
+            (git commit -m "chore: bootstrap squad-config.json [skip ci]" && git push)
+
+      - name: Validate config
+        id: config
+        uses: ./.github/actions/load-squad-config
+
+      - name: Sync labels
+        if: inputs.sync_labels == 'true'
+        uses: ./.github/actions/sync-labels
+        with:
+          labels-file: .github/templates/${{ inputs.template_profile }}/templates-mapping.json
+          repository: ${{ github.repository }}
+
+      - name: Sync milestones
+        id: sync-milestones
+        uses: ./.github/actions/sync-milestones
+        with:
+          milestones-file: .github/templates/${{ inputs.template_profile }}/templates-mapping.json
+          repository: ${{ github.repository }}
+
+      - name: Resolve first phase from templates-mapping.json
+        if: inputs.create_first_issue == 'true'
+        id: first_phase
+        run: |
+          MAPPING_FILE=".github/templates/${{ inputs.template_profile }}/templates-mapping.json"
+          FIRST_TITLE=$(jq -r '.templates[0].title' "$MAPPING_FILE")
+          FIRST_FILE=$(jq -r '.templates[0].file' "$MAPPING_FILE")
+          FIRST_LABEL=$(jq -r '.templates[0].label' "$MAPPING_FILE")
+          FIRST_MILESTONE=$(jq -r '.templates[0].milestone // empty' "$MAPPING_FILE")
+          echo "title=$FIRST_TITLE" >> $GITHUB_OUTPUT
+          echo "file=$FIRST_FILE" >> $GITHUB_OUTPUT
+          echo "label=$FIRST_LABEL" >> $GITHUB_OUTPUT
+          echo "milestone=$FIRST_MILESTONE" >> $GITHUB_OUTPUT
+
+      - name: Create first phase issue
+        if: inputs.create_first_issue == 'true'
+        uses: ./.github/actions/create-phase-issue
+        with:
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.event.repository.name }}
+          title: ${{ steps.first_phase.outputs.title }}
+          body_path: .github/templates/${{ inputs.template_profile }}/${{ steps.first_phase.outputs.file }}
+          labels: '${{ steps.config.outputs.trigger_label }},${{ steps.first_phase.outputs.label }},${{ steps.config.outputs.wip_label }}'
+          assign_copilot: 'true'
+          copilot_login: ${{ steps.config.outputs.copilot_bot_login }}
+          org_login: ${{ steps.config.outputs.org_login }}
+          project_number: ${{ steps.config.outputs.project_number }}
+          project_url: ${{ steps.config.outputs.project_url }}
+          milestone_number: ${{ fromJSON(steps.sync-milestones.outputs.milestone_map)[steps.first_phase.outputs.milestone] }}
+
+      - name: Summary
+        run: |
+          echo "## Agent Squad Bootstrapped" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Org**: ${{ inputs.org_login }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project**: #${{ inputs.project_number }} — ${{ inputs.project_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Labels synced**: ${{ inputs.sync_labels }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Milestones synced**: yes" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger label**: ${{ inputs.trigger_label }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **First phase created**: ${{ inputs.create_first_issue }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Edit \`.github/copilot-instructions.md\` with your project conventions" >> $GITHUB_STEP_SUMMARY
+          echo "2. Review \`.github/squad-config.json\` values" >> $GITHUB_STEP_SUMMARY
+          echo "3. Agent squad workflows are now active" >> $GITHUB_STEP_SUMMARY

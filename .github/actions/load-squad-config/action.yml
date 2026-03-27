@@ -1,0 +1,133 @@
+name: 'Load Squad Config'
+description: 'Reads squad-config.json and exposes values as outputs for downstream steps'
+
+inputs:
+  config_path:
+    description: 'Path to squad-config.json'
+    required: false
+    default: '.github/squad-config.json'
+
+outputs:
+  org_login:
+    description: 'Organization login'
+    value: ${{ steps.load.outputs.org_login }}
+  project_number:
+    description: 'Project number'
+    value: ${{ steps.load.outputs.project_number }}
+  project_url:
+    description: 'Project URL'
+    value: ${{ steps.load.outputs.project_url }}
+  kb_name:
+    description: 'Knowledge base display name'
+    value: ${{ steps.load.outputs.kb_name }}
+  kb_type:
+    description: 'Knowledge base type (copilot-space, local)'
+    value: ${{ steps.load.outputs.kb_type }}
+  kb_url:
+    description: 'Knowledge base URL or local path'
+    value: ${{ steps.load.outputs.kb_url }}
+  wip_label:
+    description: 'Work-in-progress label name'
+    value: ${{ steps.load.outputs.wip_label }}
+  review_label:
+    description: 'Review label name'
+    value: ${{ steps.load.outputs.review_label }}
+  trigger_label:
+    description: 'Trigger label name'
+    value: ${{ steps.load.outputs.trigger_label }}
+  copilot_bot_login:
+    description: 'Copilot bot login'
+    value: ${{ steps.load.outputs.copilot_bot_login }}
+  copilot_pr_author:
+    description: 'Login used when Copilot creates pull requests'
+    value: ${{ steps.load.outputs.copilot_pr_author }}
+  project_status_field:
+    description: 'Single-select field name for project status'
+    value: ${{ steps.load.outputs.project_status_field }}
+  human_reviewers:
+    description: 'JSON array of GitHub logins for PR reviewers'
+    value: ${{ steps.load.outputs.human_reviewers }}
+  status_todo:
+    description: 'Project status value for Todo'
+    value: ${{ steps.load.outputs.status_todo }}
+  status_wip:
+    description: 'Project status value for In Progress'
+    value: ${{ steps.load.outputs.status_wip }}
+  status_review:
+    description: 'Project status value for Review'
+    value: ${{ steps.load.outputs.status_review }}
+  status_done:
+    description: 'Project status value for Done'
+    value: ${{ steps.load.outputs.status_done }}
+  wip_timeout_hours:
+    description: 'Hours before a WIP issue is considered stuck'
+    value: ${{ steps.load.outputs.wip_timeout_hours }}
+  template_profile:
+    description: 'Template profile name (default: default)'
+    value: ${{ steps.load.outputs.template_profile }}
+  template_vars:
+    description: 'Custom template variables as JSON string'
+    value: ${{ steps.load.outputs.template_vars }}
+  workspaces:
+    description: 'Source/target workspace mapping as JSON string'
+    value: ${{ steps.load.outputs.workspaces }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Load squad configuration
+    id: load
+    shell: bash
+    run: |
+      CONFIG_PATH="${{ inputs.config_path }}"
+      if [[ ! -f "$CONFIG_PATH" ]]; then
+        echo "::error::Squad config file not found: $CONFIG_PATH"
+        exit 1
+      fi
+
+      # Validate required fields
+      ERRORS=()
+      for field in org_login project_number; do
+        val=$(jq -r ".$field // empty" "$CONFIG_PATH")
+        if [[ -z "$val" ]]; then
+          ERRORS+=("$field")
+        fi
+      done
+      for field in wip review trigger; do
+        val=$(jq -r ".labels.$field // empty" "$CONFIG_PATH")
+        if [[ -z "$val" ]]; then
+          ERRORS+=("labels.$field")
+        fi
+      done
+      if [[ ${#ERRORS[@]} -gt 0 ]]; then
+        echo "::error::squad-config.json is missing required fields: ${ERRORS[*]}"
+        exit 1
+      fi
+
+      echo "org_login=$(jq -r '.org_login' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "project_number=$(jq -r '.project_number' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "project_url=$(jq -r '.project_url' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      # Knowledge base (unified)
+      echo "kb_name=$(jq -r '.knowledge_base.name // ""' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "kb_type=$(jq -r '.knowledge_base.type // "local"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      KB_URL_RAW=$(jq -r '.knowledge_base.url // ""' "$CONFIG_PATH")
+      if [ -z "$KB_URL_RAW" ]; then
+        KB_URL_RAW=$(jq -r '.knowledge_base.local_path // ""' "$CONFIG_PATH")
+      fi
+      echo "kb_url=$KB_URL_RAW" >> $GITHUB_OUTPUT
+      echo "wip_label=$(jq -r '.labels.wip' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "review_label=$(jq -r '.labels.review' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "trigger_label=$(jq -r '.labels.trigger' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "copilot_bot_login=$(jq -r '.copilot_bot_login' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "copilot_pr_author=$(jq -r '.copilot_pr_author // ""' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "project_status_field=$(jq -r '.project_status_field // "Status"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "human_reviewers=$(jq -c '.human_reviewers // []' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "status_todo=$(jq -r '.project_status_values.todo // "Todo"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "status_wip=$(jq -r '.project_status_values.wip // "In Progress"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "status_review=$(jq -r '.project_status_values.review // "Review"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "status_done=$(jq -r '.project_status_values.done // "Done"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "wip_timeout_hours=$(jq -r '.wip_timeout_hours // 24' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "template_profile=$(jq -r '.template_profile // "default"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "template_vars=$(jq -c '.template_vars // {}' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+
+      echo "workspaces=$(jq -c '.workspaces // {}' "$CONFIG_PATH")" >> $GITHUB_OUTPUT

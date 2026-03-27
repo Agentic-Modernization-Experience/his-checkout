@@ -1,0 +1,547 @@
+name: Create Next Phase Issues
+
+on:
+  issues:
+    types: [closed]
+
+concurrency:
+  group: create-next-phase-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  check-closed-issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_create_next: ${{ steps.check.outputs.should_create_next }}
+      closed_phase: ${{ steps.check.outputs.closed_phase }}
+      next_phases: ${{ steps.check.outputs.next_phases }}
+      org_login: ${{ steps.config.outputs.org_login }}
+      project_number: ${{ steps.config.outputs.project_number }}
+      project_url: ${{ steps.config.outputs.project_url }}
+      kb_name: ${{ steps.config.outputs.kb_name }}
+      kb_type: ${{ steps.config.outputs.kb_type }}
+      kb_url: ${{ steps.config.outputs.kb_url }}
+      project_status_field: ${{ steps.config.outputs.project_status_field }}
+      template_profile: ${{ steps.config.outputs.template_profile }}
+      template_vars: ${{ steps.config.outputs.template_vars }}
+      workspaces: ${{ steps.config.outputs.workspaces }}
+      trigger_label: ${{ steps.config.outputs.trigger_label }}
+      milestone_map: ${{ steps.sync-milestones.outputs.milestone_map }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/templates
+            .github/squad-config.json
+            .github/actions/load-squad-config
+            .github/actions/sync-milestones
+
+      - name: Load squad config
+        id: config
+        uses: ./.github/actions/load-squad-config
+
+      - name: Check trigger label
+        id: check-trigger
+        run: |
+          TRIGGER_LABEL="${{ steps.config.outputs.trigger_label }}"
+          ISSUE_LABELS='${{ toJSON(github.event.issue.labels.*.name) }}'
+          if echo "$ISSUE_LABELS" | jq -e --arg label "$TRIGGER_LABEL" 'map(select(. == $label)) | length > 0' > /dev/null 2>&1; then
+            echo "has_trigger=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_trigger=false" >> $GITHUB_OUTPUT
+            echo "Issue does not have trigger label: $TRIGGER_LABEL — skipping"
+          fi
+
+      - name: Sync milestones
+        id: sync-milestones
+        if: steps.check-trigger.outputs.has_trigger == 'true'
+        uses: ./.github/actions/sync-milestones
+        with:
+          milestones-file: .github/templates/${{ steps.config.outputs.template_profile }}/templates-mapping.json
+          repository: ${{ github.repository }}
+
+      - name: Check Which Phase Was Closed and Determine Next
+        id: check
+        if: steps.check-trigger.outputs.has_trigger == 'true'
+        uses: actions/github-script@v7
+        env:
+          TRIGGER_LABEL: ${{ steps.config.outputs.trigger_label }}
+          TEMPLATE_PROFILE: ${{ steps.config.outputs.template_profile }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+
+            // Load templates mapping from profile directory (fallback to default)
+            const profile = process.env.TEMPLATE_PROFILE || 'default';
+            const profileMappingPath = `.github/templates/${profile}/templates-mapping.json`;
+            const defaultMappingPath = '.github/templates/default/templates-mapping.json';
+
+            const mappingPath = fs.existsSync(profileMappingPath) ? profileMappingPath : defaultMappingPath;
+            const mapping = JSON.parse(fs.readFileSync(mappingPath, 'utf8'));
+
+            console.log('Templates Mapping loaded');
+
+            // Get labels from closed issue
+            const issueLabels = context.payload.issue.labels.map(l => l.name);
+            console.log(`Issue labels: ${issueLabels.join(', ')}`);
+
+            // Build label-to-phase map dynamically from templates-mapping.json
+            const triggerLabel = process.env.TRIGGER_LABEL;
+            const labelToPhaseMap = {};
+            for (const t of mapping.templates) {
+              if (t.label) {
+                labelToPhaseMap[t.label] = t.id;
+              }
+            }
+
+            // Identify which phase was closed
+            let closedPhaseId = null;
+            for (const [label, phaseId] of Object.entries(labelToPhaseMap)) {
+              if (issueLabels.includes(label)) {
+                closedPhaseId = phaseId;
+                break;
+              }
+            }
+
+            if (!closedPhaseId) {
+              console.log('Could not identify closed phase from labels');
+              core.setOutput('should_create_next', 'false');
+              return;
+            }
+
+            console.log(`Closed Phase: ${closedPhaseId}`);
+
+            const closedTemplate = mapping.templates.find(t => t.id === closedPhaseId);
+            if (!closedTemplate) {
+              console.log('Template not found for closed phase');
+              core.setOutput('should_create_next', 'false');
+              return;
+            }
+
+            console.log(`Closed Phase: ${closedTemplate.title} (Phase ${closedTemplate.phase})`);
+
+            // Find next phases that depend on this one
+            const nextPhases = mapping.templates.filter(template => {
+              if (!template.dependencies || template.dependencies.length === 0) {
+                return false;
+              }
+              return template.dependencies.includes(closedPhaseId);
+            });
+
+            console.log(`Found ${nextPhases.length} phases that depend on ${closedPhaseId}`);
+
+            if (nextPhases.length === 0) {
+              console.log('No next phases to create');
+              core.setOutput('should_create_next', 'false');
+              return;
+            }
+
+            // Check which of these phases already exist
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const { data: allIssues } = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: 'all',
+              labels: process.env.TRIGGER_LABEL,
+              per_page: 100
+            });
+
+            console.log(`Found ${allIssues.length} issues with trigger label in repo`);
+
+            // Check which phases need to be created
+            const phasesToCreate = [];
+
+            for (const nextPhase of nextPhases) {
+              // Get the corresponding label for the phase
+              const phaseLabel = Object.entries(labelToPhaseMap).find(
+                ([_, id]) => id === nextPhase.id
+              )?.[0];
+
+              if (!phaseLabel) {
+                console.log(`No label mapping for ${nextPhase.id}`);
+                continue;
+              }
+
+              // Check if an issue with this label already exists
+              const existingIssue = allIssues.find(issue =>
+                issue.labels.some(label => label.name === phaseLabel)
+              );
+
+              if (existingIssue) {
+                console.log(`Phase ${nextPhase.id} already exists: #${existingIssue.number}`);
+                continue;
+              }
+
+              // Check if all dependencies for this phase are resolved
+              let allDependenciesMet = true;
+
+              if (nextPhase.dependencies && nextPhase.dependencies.length > 0) {
+                for (const depId of nextPhase.dependencies) {
+                  const depLabel = Object.entries(labelToPhaseMap).find(
+                    ([_, id]) => id === depId
+                  )?.[0];
+
+                  if (!depLabel) continue;
+
+                  const depIssue = allIssues.find(issue =>
+                    issue.labels.some(label => label.name === depLabel)
+                  );
+
+                  if (!depIssue || depIssue.state !== 'closed') {
+                    console.log(`Dependency ${depId} not met for ${nextPhase.id}`);
+                    allDependenciesMet = false;
+                    break;
+                  }
+                }
+              }
+
+              if (allDependenciesMet) {
+                console.log(`Phase ${nextPhase.id} is ready to be created`);
+                phasesToCreate.push(nextPhase);
+              }
+            }
+
+            if (phasesToCreate.length === 0) {
+              console.log('No phases ready to be created');
+              core.setOutput('should_create_next', 'false');
+              return;
+            }
+
+            // Sort by phase to create in correct order
+            phasesToCreate.sort((a, b) => a.phase - b.phase);
+
+            console.log(`Will create ${phasesToCreate.length} phase(s):`);
+            phasesToCreate.forEach(p => console.log(`   - ${p.id} (Phase ${p.phase})`));
+
+            core.setOutput('should_create_next', 'true');
+            core.setOutput('closed_phase', closedPhaseId);
+            core.setOutput('next_phases', JSON.stringify(phasesToCreate));
+
+  create-next-phase-issues:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: check-closed-issue
+    if: needs.check-closed-issue.outputs.should_create_next == 'true'
+    outputs:
+      created_issues: ${{ steps.create-issues.outputs.created_issues }}
+    env:
+      PROJECT_URL: ${{ needs.check-closed-issue.outputs.project_url }}
+      KB_NAME: ${{ needs.check-closed-issue.outputs.kb_name }}
+      KB_TYPE: ${{ needs.check-closed-issue.outputs.kb_type }}
+      KB_URL: ${{ needs.check-closed-issue.outputs.kb_url }}
+      TEMPLATE_PROFILE: ${{ needs.check-closed-issue.outputs.template_profile }}
+      TEMPLATE_VARS: ${{ needs.check-closed-issue.outputs.template_vars }}
+      WORKSPACES: ${{ needs.check-closed-issue.outputs.workspaces }}
+      TRIGGER_LABEL: ${{ needs.check-closed-issue.outputs.trigger_label }}
+      MILESTONE_MAP: ${{ needs.check-closed-issue.outputs.milestone_map }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/templates
+
+      - name: Create Next Phase Issues
+        id: create-issues
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+
+            // Resolve profile-aware paths
+            const profile = process.env.TEMPLATE_PROFILE || 'default';
+            const profileDir = `.github/templates/${profile}`;
+            const defaultDir = '.github/templates/default';
+
+            // Load templates mapping from profile (fallback to default)
+            const profileMappingPath = `${profileDir}/templates-mapping.json`;
+            const defaultMappingPath = `${defaultDir}/templates-mapping.json`;
+            const mappingPath = fs.existsSync(profileMappingPath) ? profileMappingPath : defaultMappingPath;
+            const mapping = JSON.parse(fs.readFileSync(mappingPath, 'utf8'));
+
+            console.log(`Templates Mapping loaded (profile: ${profile})`);
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const closedIssueNumber = context.issue.number;
+            const closedIssueUrl = context.payload.issue.html_url;
+
+            // Get the next phases to create
+            const nextPhases = JSON.parse('${{ needs.check-closed-issue.outputs.next_phases }}');
+
+            console.log(`\nTarget Repository: ${owner}/${repo}`);
+            console.log(`Closed Issue: #${closedIssueNumber}`);
+            console.log(`Creating ${nextPhases.length} phase(s)`);
+
+            const results = [];
+
+            // Create issues for the next phases
+            for (const template of nextPhases) {
+              console.log(`\nProcessing: ${template.id} (Phase ${template.phase})`);
+
+              try {
+                // Resolve template file: profile dir first, fallback to default
+                const profileTemplatePath = `${profileDir}/${template.file}`;
+                const defaultTemplatePath = `${defaultDir}/${template.file}`;
+                const templatePath = fs.existsSync(profileTemplatePath) ? profileTemplatePath : defaultTemplatePath;
+
+                if (!fs.existsSync(templatePath)) {
+                  console.log(`Template file not found in profile or default: ${template.file}`);
+                  results.push({
+                    template: template.id,
+                    status: 'skipped',
+                    reason: 'template file not found'
+                  });
+                  continue;
+                }
+
+                let body = fs.readFileSync(templatePath, 'utf8');
+
+                // Strip YAML frontmatter (--- ... ---) added for GitHub issue template chooser
+                if (body.startsWith('---\n')) {
+                  const endIndex = body.indexOf('\n---\n', 4);
+                  if (endIndex !== -1) {
+                    body = body.slice(endIndex + 5).trimStart();
+                  }
+                }
+
+                console.log(`Template read successfully (${body.length} bytes)`);
+
+                // Resolve root phase label dynamically from templates-mapping.json
+                const rootPhaseLabel = mapping.templates[0]?.label || '';
+                let rootIssueNumber = closedIssueNumber;
+                let rootIssueUrl = closedIssueUrl;
+
+                if (rootPhaseLabel) {
+                  const { data: rootIssues } = await github.rest.issues.listForRepo({
+                    owner,
+                    repo,
+                    state: 'all',
+                    labels: rootPhaseLabel,
+                    per_page: 10
+                  });
+
+                  const rootIssue = rootIssues.find(issue =>
+                    issue.labels.some(label => label.name === rootPhaseLabel)
+                  );
+
+                  if (rootIssue) {
+                    rootIssueNumber = rootIssue.number;
+                    rootIssueUrl = rootIssue.html_url;
+                  }
+                }
+
+                // Build variable map: built-in vars + workspace-derived vars + custom vars
+                const builtInVars = {
+                  MAIN_ISSUE_URL: rootIssueUrl,
+                  ISSUE_NUMBER: rootIssueNumber.toString(),
+                  KB_NAME: process.env.KB_NAME || '',
+                  KB_TYPE: process.env.KB_TYPE || '',
+                  KB_URL: process.env.KB_URL || '',
+                };
+
+                // Flatten workspace paths into vars: SOURCE_PATH_*, TARGET_PATH_*, SOURCE_LABEL, TARGET_LABEL
+                try {
+                  const ws = JSON.parse(process.env.WORKSPACES || '{}');
+                  if (ws.source) {
+                    builtInVars.SOURCE_LABEL = ws.source.label || '';
+                    for (const [k, v] of Object.entries(ws.source.paths || {})) {
+                      builtInVars[`SOURCE_PATH_${k.toUpperCase()}`] = v;
+                    }
+                  }
+                  if (ws.target) {
+                    builtInVars.TARGET_LABEL = ws.target.label || '';
+                    for (const [k, v] of Object.entries(ws.target.paths || {})) {
+                      builtInVars[`TARGET_PATH_${k.toUpperCase()}`] = v;
+                    }
+                  }
+                } catch (e) {
+                  console.log('Warning: Could not parse workspaces config');
+                }
+
+                // Merge custom template_vars (from squad-config.json)
+                let customVars = {};
+                try { customVars = JSON.parse(process.env.TEMPLATE_VARS || '{}'); } catch (e) {}
+                const allVars = { ...builtInVars, ...customVars };
+
+                // Replace all {{PLACEHOLDER}} occurrences
+                for (const [key, value] of Object.entries(allVars)) {
+                  body = body.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
+                }
+
+                // Fail on unresolved placeholders
+                const unresolved = body.match(/\{\{[A-Z0-9_]+\}\}/g);
+                if (unresolved) {
+                  const unique = [...new Set(unresolved)];
+                  core.warning(`Unresolved placeholders in ${template.id}: ${unique.join(', ')}. Add them to template_vars in squad-config.json.`);
+                }
+
+                // Add reference to the completed issue
+                const triggerNote = `\n\n---\n\n**Triggered by**: Issue #${closedIssueNumber} was completed\n**Previous Phase**: ${context.payload.issue.title}`;
+                body = body + triggerNote;
+
+                // Build labels array: trigger label + phase-specific label
+                const issueLabels = [process.env.TRIGGER_LABEL, template.label].filter(Boolean);
+
+                // Resolve milestone number from map
+                let milestoneNumber = null;
+                try {
+                  const milestoneMap = JSON.parse(process.env.MILESTONE_MAP || '{}');
+                  if (template.milestone && milestoneMap[template.milestone]) {
+                    milestoneNumber = milestoneMap[template.milestone];
+                  }
+                } catch (e) {
+                  console.log('Warning: Could not parse milestone map');
+                }
+
+                // Create the issue
+                const { data: issue } = await github.rest.issues.create({
+                  owner,
+                  repo,
+                  title: template.title,
+                  body: body,
+                  labels: issueLabels,
+                  milestone: milestoneNumber || undefined
+                });
+
+                console.log(`Issue created: #${issue.number} - ${issue.title}`);
+                console.log(`   URL: ${issue.html_url}`);
+
+                results.push({
+                  template: template.id,
+                  phase: template.phase,
+                  status: 'success',
+                  issue_number: issue.number,
+                  issue_url: issue.html_url,
+                  issue_node_id: issue.node_id,
+                  title: template.title
+                });
+
+                // Small delay between creations
+                await new Promise(resolve => setTimeout(resolve, 500));
+
+              } catch (error) {
+                console.error(`Error creating issue for ${template.id}:`, error.message);
+                results.push({
+                  template: template.id,
+                  phase: template.phase,
+                  status: 'failed',
+                  error: error.message
+                });
+              }
+            }
+
+            // Results summary
+            const succeeded = results.filter(r => r.status === 'success');
+            const failed = results.filter(r => r.status === 'failed');
+            const skipped = results.filter(r => r.status === 'skipped');
+
+            console.log(`\nCreation Summary:`);
+            console.log(`   Success: ${succeeded.length}`);
+            console.log(`   Failed: ${failed.length}`);
+            console.log(`   Skipped: ${skipped.length}`);
+            console.log(`   Total: ${nextPhases.length}`);
+
+            core.setOutput('issues_created', succeeded.length);
+            core.setOutput('issues_failed', failed.length);
+            core.setOutput('issues_skipped', skipped.length);
+            core.setOutput('total_phases', nextPhases.length);
+            core.setOutput('results', JSON.stringify(results, null, 2));
+
+            // Output for add-to-project job
+            const createdNodeIds = succeeded.map(r => ({ node_id: r.issue_node_id }));
+            core.setOutput('created_issues', JSON.stringify(createdNodeIds));
+
+            // Comment on closed issue with summary
+            if (succeeded.length > 0) {
+              const successList = succeeded.map(r =>
+                `- [${r.title}](${r.issue_url}) (#${r.issue_number})`
+              ).join('\n');
+
+              const failedList = failed.length > 0 ?
+                `\n\n**Failed:**\n` + failed.map(r =>
+                  `- ${r.template}: ${r.error}`
+                ).join('\n') : '';
+
+              const comment = `## Phase Complete - Next Phases Created\n\nThis phase has been completed! The following dependent phases have been automatically created:\n\n**Next Phases (${succeeded.length}):**\n${successList}\n${failedList}\n\n**Project:** ${process.env.PROJECT_URL}\n\n---\n*Automated by Sequential Phase Creation Workflow*`;
+
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: closedIssueNumber,
+                body: comment
+              });
+
+              console.log(`\nComment added to closed issue #${closedIssueNumber}`);
+            } else {
+              // Comment indicating this was the last phase or no next phases
+              const noNextMsg = results.length > 0 ? 'No new phases were created (dependencies may not be met yet).' : 'This was the final phase or all remaining phases are already created.';
+              const comment = `## Phase Complete\n\nThis phase has been completed!\n\n${noNextMsg}\n\n**Project:** ${process.env.PROJECT_URL}\n\n---\n*Automated by Sequential Phase Creation Workflow*`;
+
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: closedIssueNumber,
+                body: comment
+              });
+            }
+
+            if (failed.length > 0) {
+              core.setFailed(`${failed.length} issue(s) failed to create`);
+            }
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## � Sequential Phase Creation Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Closed Phase**: ${{ needs.check-closed-issue.outputs.closed_phase }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Next Phases Created**: ${{ steps.create-issues.outputs.issues_created || '0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Failed**: ${{ steps.create-issues.outputs.issues_failed || '0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Skipped**: ${{ steps.create-issues.outputs.issues_skipped || '0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Links" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project**: ${{ env.PROJECT_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Closed Issue**: ${{ github.event.issue.html_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Details" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.create-issues.outputs.results }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  add-issues-to-project:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [check-closed-issue, create-next-phase-issues]
+    if: needs.create-next-phase-issues.outputs.created_issues != '[]' && needs.create-next-phase-issues.outputs.created_issues != ''
+    strategy:
+      matrix:
+        issue: ${{ fromJson(needs.create-next-phase-issues.outputs.created_issues) }}
+      max-parallel: 3
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/add-to-project
+
+      - name: Add issue to project
+        uses: ./.github/actions/add-to-project
+        with:
+          issue_id: ${{ matrix.issue.node_id }}
+          org_login: ${{ needs.check-closed-issue.outputs.org_login }}
+          project_number: ${{ needs.check-closed-issue.outputs.project_number }}
+          status_field: ${{ needs.check-closed-issue.outputs.project_status_field }}

@@ -1,0 +1,53 @@
+{
+  "org_login": "Agentic-Modernization-Experience",
+  "project_number": 8,
+  "project_url": "https://github.com/orgs/Agentic-Modernization-Experience/projects/8",
+  "knowledge_base": {
+    "type": "copilot-space",
+    "name": "KB-Modernization",
+    "url": "https://github.com/copilot/spaces/Agentic-Modernization-Experience/1",
+    "local_path": ".github/knowledge-base"
+  },
+  "labels": {
+    "wip": "AI-AGENT_WIP",
+    "review": "AI-AGENT_REVIEW",
+    "trigger": "modernization"
+  },
+  "copilot_bot_login": "copilot-swe-agent",
+  "copilot_pr_author": "Copilot",
+  "project_status_field": "Status",
+  "project_status_values": {
+    "todo": "Todo",
+    "wip": "In Progress",
+    "review": "Review",
+    "done": "Done"
+  },
+  "human_reviewers": [],
+  "wip_timeout_hours": 24,
+  "template_profile": "modernization",
+  "template_vars": {
+    "TARGET_DB": "PostgreSQL"
+  },
+  "workspaces": {
+    "source": {
+      "label": "Legacy COBOL/CICS",
+      "paths": {
+        "programs": "cbl/",
+        "copybooks": "cpy/",
+        "maps": "bms/",
+        "jobs": "jcl/",
+        "data": "data/"
+      }
+    },
+    "target": {
+      "label": "Java 21",
+      "paths": {
+        "backend": "src/main/java/",
+        "tests": "src/test/java/",
+        "config": "src/main/resources/",
+        "migrations": "src/main/resources/db/migration/",
+        "docs": "docs/"
+      }
+    }
+  }
+}

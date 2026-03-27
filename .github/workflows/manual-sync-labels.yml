@@ -1,0 +1,45 @@
+name: 'Manual: Sync Labels'
+description: 'Synchronize repository labels from a JSON configuration file'
+
+on:
+  workflow_dispatch:
+    inputs:
+      labels-file:
+        description: 'Path to the labels JSON file (leave empty to auto-detect from squad-config.json template_profile)'
+        required: false
+        default: ''
+
+permissions:
+  issues: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  prepare-repository:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve labels file path
+        id: resolve
+        run: |
+          INPUT_PATH="${{ inputs.labels-file }}"
+          if [[ -n "$INPUT_PATH" ]]; then
+            echo "path=$INPUT_PATH" >> $GITHUB_OUTPUT
+          else
+            PROFILE=$(jq -r '.template_profile // "default"' .github/squad-config.json)
+            PROFILE_PATH=".github/templates/${PROFILE}/templates-mapping.json"
+            if [[ -f "$PROFILE_PATH" ]]; then
+              echo "path=$PROFILE_PATH" >> $GITHUB_OUTPUT
+            else
+              echo "path=.github/templates/default/templates-mapping.json" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Sync Labels
+        uses: ./.github/actions/sync-labels
+        with:
+          labels-file: ${{ steps.resolve.outputs.path }}
+          repository: ${{ github.repository }}

@@ -1,0 +1,177 @@
+name: 'Sync Repository Labels'
+description: 'Synchronize repository labels from a JSON configuration file'
+
+inputs:
+  labels-file:
+    description: 'Path to the labels JSON file'
+    required: true
+    default: '.github/templates/default/templates-mapping.json'
+  repository:
+    description: 'Repository to sync labels (format: owner/repo)'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Validate inputs
+    shell: bash
+    run: |
+      if [[ ! "${{ inputs.repository }}" =~ ^[^/]+/[^/]+$ ]]; then
+        echo "::error::Invalid repository format. Expected: owner/repo"
+        exit 1
+      fi
+
+      if [[ ! -f "${{ inputs.labels-file }}" ]]; then
+        echo "::error::Labels file not found: ${{ inputs.labels-file }}"
+        exit 1
+      fi
+
+  - name: Sync Labels
+    shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      LABELS_FILE: ${{ inputs.labels-file }}
+      REPOSITORY: ${{ inputs.repository }}
+    run: |
+      echo "## Label Synchronization Report" >> $GITHUB_STEP_SUMMARY
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "**Repository:** \`$REPOSITORY\`" >> $GITHUB_STEP_SUMMARY
+      echo "**Labels File:** \`$LABELS_FILE\`" >> $GITHUB_STEP_SUMMARY
+      echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Initialize counters
+      CREATED=0
+      UPDATED=0
+      UNCHANGED=0
+      ERRORS=0
+
+      # Arrays to store results
+      CREATED_LABELS=()
+      UPDATED_LABELS=()
+      UNCHANGED_LABELS=()
+      ERROR_LABELS=()
+
+      # Read labels from JSON file (supports both flat .labels[] and grouped .labels.phase/.labels.framework)
+      if jq -e '.labels | type == "array"' "$LABELS_FILE" > /dev/null 2>&1; then
+        LABELS=$(jq -c '.labels[]' "$LABELS_FILE")
+      elif jq -e '.labels.phase' "$LABELS_FILE" > /dev/null 2>&1; then
+        LABELS=$(jq -c '(.labels.phase + .labels.framework)[]' "$LABELS_FILE")
+      else
+        echo "::error::Unsupported labels file format: $LABELS_FILE"
+        exit 1
+      fi
+
+      # Get existing labels from repository
+      echo "Fetching existing labels from $REPOSITORY..."
+      EXISTING_LABELS=$(gh api "repos/$REPOSITORY/labels" --paginate --jq '.[] | {name: .name, color: .color, description: .description}')
+
+      # Process each label
+      while IFS= read -r label; do
+        NAME=$(echo "$label" | jq -r '.name')
+        COLOR=$(echo "$label" | jq -r '.color')
+        DESCRIPTION=$(echo "$label" | jq -r '.description // ""')
+
+        echo "Processing label: $NAME"
+
+        # Check if label exists
+        EXISTING=$(echo "$EXISTING_LABELS" | jq -s --arg name "$NAME" '.[] | select(.name == $name)')
+
+        if [[ -z "$EXISTING" ]]; then
+          # Label doesn't exist, create it
+          echo "  → Creating new label..."
+          if gh api "repos/$REPOSITORY/labels" -X POST \
+            -f name="$NAME" \
+            -f color="$COLOR" \
+            -f description="$DESCRIPTION" > /dev/null 2>&1; then
+            echo "  [OK] Created successfully"
+            CREATED=$((CREATED + 1))
+            CREATED_LABELS+=("$NAME")
+          else
+            echo "  [FAIL] Failed to create"
+            ERRORS=$((ERRORS + 1))
+            ERROR_LABELS+=("$NAME (create)")
+          fi
+        else
+          # Label exists, check if update is needed
+          EXISTING_COLOR=$(echo "$EXISTING" | jq -r '.color')
+          EXISTING_DESC=$(echo "$EXISTING" | jq -r '.description // ""')
+
+          if [[ "$COLOR" != "$EXISTING_COLOR" ]] || [[ "$DESCRIPTION" != "$EXISTING_DESC" ]]; then
+            echo "  → Updating existing label..."
+            ENCODED_NAME=$(jq -rn --arg n "$NAME" '$n|@uri')
+            if gh api "repos/$REPOSITORY/labels/$ENCODED_NAME" -X PATCH \
+              -f new_name="$NAME" \
+              -f color="$COLOR" \
+              -f description="$DESCRIPTION" > /dev/null 2>&1; then
+              echo "  [OK] Updated successfully"
+              UPDATED=$((UPDATED + 1))
+              UPDATED_LABELS+=("$NAME")
+            else
+              echo "  [FAIL] Failed to update"
+              ERRORS=$((ERRORS + 1))
+              ERROR_LABELS+=("$NAME (update)")
+            fi
+          else
+            echo "  [SKIP] No changes needed"
+            UNCHANGED=$((UNCHANGED + 1))
+            UNCHANGED_LABELS+=("$NAME")
+          fi
+        fi
+      done <<< "$LABELS"
+
+      # Generate summary
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "### Summary" >> $GITHUB_STEP_SUMMARY
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "| Status | Count |" >> $GITHUB_STEP_SUMMARY
+      echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+      echo "| Created | $CREATED |" >> $GITHUB_STEP_SUMMARY
+      echo "| Updated | $UPDATED |" >> $GITHUB_STEP_SUMMARY
+      echo "| Unchanged | $UNCHANGED |" >> $GITHUB_STEP_SUMMARY
+      echo "| Errors | $ERRORS |" >> $GITHUB_STEP_SUMMARY
+      echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Details for created labels
+      if [[ $CREATED -gt 0 ]]; then
+        echo "### Created Labels ($CREATED)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        for label in "${CREATED_LABELS[@]}"; do
+          echo "- \`$label\`" >> $GITHUB_STEP_SUMMARY
+        done
+        echo "" >> $GITHUB_STEP_SUMMARY
+      fi
+
+      # Details for updated labels
+      if [[ $UPDATED -gt 0 ]]; then
+        echo "### Updated Labels ($UPDATED)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        for label in "${UPDATED_LABELS[@]}"; do
+          echo "- \`$label\`" >> $GITHUB_STEP_SUMMARY
+        done
+        echo "" >> $GITHUB_STEP_SUMMARY
+      fi
+
+      # Details for unchanged labels
+      if [[ $UNCHANGED -gt 0 ]]; then
+        echo "### Unchanged Labels ($UNCHANGED)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        for label in "${UNCHANGED_LABELS[@]}"; do
+          echo "- \`$label\`" >> $GITHUB_STEP_SUMMARY
+        done
+        echo "" >> $GITHUB_STEP_SUMMARY
+      fi
+
+      # Details for errors
+      if [[ $ERRORS -gt 0 ]]; then
+        echo "### Errors ($ERRORS)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        for label in "${ERROR_LABELS[@]}"; do
+          echo "- \`$label\`" >> $GITHUB_STEP_SUMMARY
+        done
+        echo "" >> $GITHUB_STEP_SUMMARY
+        exit 1
+      fi
+
+      echo "---" >> $GITHUB_STEP_SUMMARY
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "Label synchronization completed successfully!" >> $GITHUB_STEP_SUMMARY

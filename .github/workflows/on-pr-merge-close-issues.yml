@@ -1,0 +1,162 @@
+name: 'On PR Merge: Close Linked Issues'
+
+on:
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: pr-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  close-linked-issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/squad-config.json
+            .github/actions/load-squad-config
+            .github/actions/update-project-status
+
+      - name: Load squad config
+        id: config
+        uses: ./.github/actions/load-squad-config
+
+      - name: Check if PR author is Copilot
+        id: check-author
+        run: |
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          COPILOT_PR_AUTHOR="${{ steps.config.outputs.copilot_pr_author }}"
+          COPILOT_BOT_LOGIN="${{ steps.config.outputs.copilot_bot_login }}"
+          if [[ "$PR_AUTHOR" == "$COPILOT_PR_AUTHOR" || "$PR_AUTHOR" == "$COPILOT_BOT_LOGIN" ]]; then
+            echo "is_copilot=true" >> $GITHUB_OUTPUT
+            echo "PR author ($PR_AUTHOR) matches Copilot config"
+          else
+            echo "is_copilot=false" >> $GITHUB_OUTPUT
+            echo "PR author ($PR_AUTHOR) is not Copilot — skipping"
+          fi
+
+      - name: Find linked issue from PR
+        id: find-issue
+        if: steps.check-author.outputs.is_copilot == 'true'
+        uses: actions/github-script@v7
+        env:
+          TRIGGER_LABEL: ${{ steps.config.outputs.trigger_label }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const prNumber = context.payload.pull_request.number;
+            const prBody = context.payload.pull_request.body || '';
+            const reviewLabel = '${{ steps.config.outputs.review_label }}';
+            const wipLabel = '${{ steps.config.outputs.wip_label }}';
+
+            console.log(`Finding linked issue for merged PR #${prNumber}...`);
+
+            // Strategy 1: Parse "Closes #N" / "Fixes #N" from PR body
+            const closesPattern = /(?:closes|fixes|resolves)\s+#(\d+)/gi;
+            let match;
+            while ((match = closesPattern.exec(prBody)) !== null) {
+              const issueNumber = parseInt(match[1], 10);
+              try {
+                const issue = await github.rest.issues.get({ owner, repo, issue_number: issueNumber });
+                const hasTriggerLabel = issue.data.labels.some(l => l.name === process.env.TRIGGER_LABEL);
+                if (hasTriggerLabel && issue.data.state === 'open') {
+                  console.log(`Found linked issue #${issueNumber} via PR body`);
+                  core.setOutput('issue_number', issueNumber);
+                  core.setOutput('issue_id', issue.data.node_id);
+                  core.setOutput('found', 'true');
+                  return;
+                }
+              } catch (e) {
+                console.log(`Could not fetch issue #${issueNumber}: ${e.message}`);
+              }
+            }
+
+            // Strategy 2: Search open issues with review/wip label for cross-reference to this PR
+            for (const label of [reviewLabel, wipLabel]) {
+              const { data: issues } = await github.rest.issues.listForRepo({
+                owner, repo,
+                labels: `${process.env.TRIGGER_LABEL},${label}`,
+                state: 'open',
+                per_page: 50
+              });
+
+              for (const issue of issues) {
+                const timeline = await github.rest.issues.listEventsForTimeline({
+                  owner, repo,
+                  issue_number: issue.number,
+                  per_page: 100
+                });
+
+                for (const event of timeline.data) {
+                  if (event.event === 'cross-referenced' &&
+                      event.source?.issue?.pull_request &&
+                      event.source?.issue?.number === prNumber) {
+                    console.log(`Found linked issue #${issue.number} via cross-reference`);
+                    core.setOutput('issue_number', issue.number);
+                    core.setOutput('issue_id', issue.node_id);
+                    core.setOutput('found', 'true');
+                    return;
+                  }
+                }
+              }
+            }
+
+            console.log('No linked issue found for this PR');
+            core.setOutput('found', 'false');
+
+      - name: Update Project Status to Done
+        if: steps.find-issue.outputs.found == 'true'
+        uses: ./.github/actions/update-project-status
+        with:
+          issue_id: ${{ steps.find-issue.outputs.issue_id }}
+          project_number: ${{ steps.config.outputs.project_number }}
+          org_login: ${{ steps.config.outputs.org_login }}
+          status: ${{ steps.config.outputs.status_done }}
+          status_field: ${{ steps.config.outputs.project_status_field }}
+
+      - name: Close issue
+        if: steps.find-issue.outputs.found == 'true'
+        uses: actions/github-script@v7
+        env:
+          PROJECT_URL: ${{ steps.config.outputs.project_url }}
+          REVIEW_LABEL: ${{ steps.config.outputs.review_label }}
+          WIP_LABEL: ${{ steps.config.outputs.wip_label }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issueNumber = Number('${{ steps.find-issue.outputs.issue_number }}');
+            const prNumber = context.payload.pull_request.number;
+
+            // Clean up labels: remove WIP and Review
+            const issue = await github.rest.issues.get({ owner, repo, issue_number: issueNumber });
+            const labels = issue.data.labels
+              .map(l => l.name)
+              .filter(n => n !== process.env.WIP_LABEL && n !== process.env.REVIEW_LABEL);
+            await github.rest.issues.setLabels({ owner, repo, issue_number: issueNumber, labels });
+
+            // Comment before closing
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issueNumber,
+              body: `**Phase Complete — PR Merged**\n\n**Pull Request**: #${prNumber} (merged)\nProject status updated\nWorkflow labels removed\n\n[View in Project](${process.env.PROJECT_URL})\n\n---\n*Next phases will be created automatically.*`
+            });
+
+            // Close the issue — this triggers create-next-phase-issues.yml
+            await github.rest.issues.update({
+              owner, repo, issue_number: issueNumber,
+              state: 'closed',
+              state_reason: 'completed'
+            });
+
+            console.log(`Issue #${issueNumber} closed. Next phases will be created automatically.`);

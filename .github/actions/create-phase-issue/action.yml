@@ -1,0 +1,337 @@
+name: 'Create Phase Issue'
+description: 'Creates a phase issue and optionally assigns Copilot, links projects, and comments on related issues.'
+
+inputs:
+  owner:
+    description: 'Repository owner for the issue to create'
+    required: true
+  repo:
+    description: 'Repository name for the issue to create'
+    required: true
+  title:
+    description: 'Title for the new issue'
+    required: true
+  body:
+    description: 'Body contents for the new issue (ignored when body_path is provided)'
+    required: false
+    default: ''
+  body_path:
+    description: 'Path to a file containing the issue body'
+    required: false
+    default: ''
+  labels:
+    description: 'Comma or newline separated list of labels to apply'
+    required: false
+    default: ''
+  milestone_number:
+    description: 'Milestone number to assign to the created issue'
+    required: false
+    default: ''
+  assign_copilot:
+    description: 'Whether to attempt assigning the copilot-swe-agent bot'
+    required: false
+    default: 'false'
+  copilot_login:
+    description: 'Bot login to assign when assign_copilot is true'
+    required: false
+    default: ''
+  parent_issue_node_id:
+    description: 'GraphQL node ID of the parent issue when creating sub-issue relationship'
+    required: false
+    default: ''
+  parent_comment_owner:
+    description: 'Owner for the issue that should receive a status comment'
+    required: false
+    default: ''
+  parent_comment_repo:
+    description: 'Repository for the issue that should receive a status comment'
+    required: false
+    default: ''
+  parent_comment_issue_number:
+    description: 'Issue number that should receive a status comment'
+    required: false
+    default: ''
+  parent_comment_body:
+    description: 'Template for the comment body. Supports placeholders: {{ISSUE_URL}}, {{ISSUE_NUMBER}}, {{ISSUE_TITLE}}, {{PROJECT_URL}}, {{REPOSITORY}}, {{COPILOT_MESSAGE}}.'
+    required: false
+    default: ''
+  org_login:
+    description: 'Organization login used for project interactions'
+    required: false
+    default: ''
+  project_number:
+    description: 'Project number to add the issue to'
+    required: false
+    default: ''
+  project_status_field:
+    description: 'Single select field name to update for the project status'
+    required: false
+    default: 'Status'
+  project_status_value:
+    description: 'Single select option to use when updating the project status'
+    required: false
+    default: ''
+  project_url:
+    description: 'Project URL used in summary comments or outputs'
+    required: false
+    default: ''
+
+outputs:
+  issue_number:
+    description: 'Number of the created issue'
+    value: ${{ steps.create.outputs.issue_number }}
+  issue_url:
+    description: 'URL of the created issue'
+    value: ${{ steps.create.outputs.issue_url }}
+  issue_node_id:
+    description: 'Node ID of the created issue'
+    value: ${{ steps.create.outputs.issue_node_id }}
+  copilot_assigned:
+    description: 'Whether the Copilot bot was assigned successfully'
+    value: ${{ steps.assign-copilot.outputs.success || 'false' }}
+  copilot_message:
+    description: 'Human-readable status for Copilot assignment'
+    value: ${{ steps.copilot-msg.outputs.copilot_message }}
+  project_item_id:
+    description: 'Identifier of the created project item when available'
+    value: ${{ steps.project.outputs.project_item_id }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Create issue
+    id: create
+    uses: actions/github-script@v7
+    env:
+      OWNER: ${{ inputs.owner }}
+      REPO: ${{ inputs.repo }}
+      TITLE_JSON: ${{ toJSON(inputs.title) }}
+      BODY_JSON: ${{ toJSON(inputs.body) }}
+      BODY_PATH: ${{ inputs.body_path }}
+      LABELS: ${{ inputs.labels }}
+      MILESTONE_NUMBER: ${{ inputs.milestone_number }}
+      ASSIGN_COPILOT: ${{ inputs.assign_copilot }}
+      PARENT_ISSUE_NODE_ID: ${{ inputs.parent_issue_node_id }}
+      PARENT_COMMENT_OWNER: ${{ inputs.parent_comment_owner }}
+      PARENT_COMMENT_REPO: ${{ inputs.parent_comment_repo }}
+      PARENT_COMMENT_ISSUE_NUMBER: ${{ inputs.parent_comment_issue_number }}
+      PARENT_COMMENT_BODY_JSON: ${{ toJSON(inputs.parent_comment_body) }}
+      PROJECT_URL_JSON: ${{ toJSON(inputs.project_url) }}
+    with:
+      github-token: ${{ github.token }}
+      result-encoding: string
+      script: |
+        const fs = require('fs');
+
+        const owner = (process.env.OWNER || '').trim();
+        const repo = (process.env.REPO || '').trim();
+        const title = parseJSON(process.env.TITLE_JSON, '').trim();
+        const bodyPath = (process.env.BODY_PATH || '').trim();
+        const labelsInput = process.env.LABELS || '';
+        const milestoneNumber = parseInteger(process.env.MILESTONE_NUMBER);
+        const assignCopilotFlag = parseBoolean(process.env.ASSIGN_COPILOT);
+        const parentIssueNodeId = (process.env.PARENT_ISSUE_NODE_ID || '').trim();
+        const parentCommentOwnerInput = (process.env.PARENT_COMMENT_OWNER || '').trim();
+        const parentCommentRepoInput = (process.env.PARENT_COMMENT_REPO || '').trim();
+        const parentCommentIssueNumber = parseInteger(process.env.PARENT_COMMENT_ISSUE_NUMBER);
+        const parentCommentBodyTemplate = parseJSON(process.env.PARENT_COMMENT_BODY_JSON, '').trim();
+        const projectUrl = parseJSON(process.env.PROJECT_URL_JSON, '').trim();
+
+        try {
+          if (!owner) {
+            throw new Error('Input "owner" is required.');
+          }
+
+          if (!repo) {
+            throw new Error('Input "repo" is required.');
+          }
+
+          if (!title) {
+            throw new Error('Input "title" is required.');
+          }
+
+          let body = parseJSON(process.env.BODY_JSON, '');
+          if (bodyPath) {
+            if (!fs.existsSync(bodyPath)) {
+              throw new Error(`Issue body file not found: ${bodyPath}`);
+            }
+
+            body = fs.readFileSync(bodyPath, 'utf8');
+          }
+
+          if (!body || !body.trim()) {
+            throw new Error('Issue body is required. Provide "body" or "body_path".');
+          }
+
+          const labels = parseLabels(labelsInput);
+
+          core.info(`Creating issue in ${owner}/${repo}...`);
+          const response = await github.rest.issues.create({
+            owner,
+            repo,
+            title,
+            body,
+            labels: labels.length ? labels : undefined,
+            milestone: milestoneNumber || undefined
+          });
+
+          const issueNumber = response.data.number;
+          const issueUrl = response.data.html_url;
+          const issueNodeId = response.data.node_id;
+
+          core.info(`Issue created: ${issueUrl}`);
+          core.setOutput('issue_number', String(issueNumber));
+          core.setOutput('issue_url', issueUrl);
+          core.setOutput('issue_node_id', issueNodeId);
+          core.setOutput('issue_id', issueNodeId);
+
+          const copilotMessage = assignCopilotFlag
+            ? 'Copilot will be assigned to this issue.'
+            : 'Copilot assignment not requested.';
+
+          if (parentIssueNodeId) {
+            try {
+              await createSubIssueRelationship(github, parentIssueNodeId, issueNodeId);
+              core.info('Linked issue as sub-issue.');
+            } catch (error) {
+              core.warning(`Failed to create sub-issue relationship: ${error.message}`);
+            }
+          }
+
+          if (parentCommentBodyTemplate && parentCommentIssueNumber) {
+            const commentOwner = parentCommentOwnerInput || context.repo.owner;
+            const commentRepo = parentCommentRepoInput || context.repo.repo;
+            const templateData = {
+              ISSUE_URL: issueUrl,
+              ISSUE_NUMBER: String(issueNumber),
+              ISSUE_TITLE: title,
+              PROJECT_URL: projectUrl,
+              REPOSITORY: `${owner}/${repo}`,
+              COPILOT_MESSAGE: copilotMessage
+            };
+
+            const commentBody = applyTemplate(parentCommentBodyTemplate, templateData).trim();
+
+            if (commentBody) {
+              try {
+                await github.rest.issues.createComment({
+                  owner: commentOwner,
+                  repo: commentRepo,
+                  issue_number: parentCommentIssueNumber,
+                  body: commentBody
+                });
+                core.info('Notification comment added to parent issue.');
+              } catch (error) {
+                core.warning(`Failed to add comment to parent issue: ${error.message}`);
+              }
+            }
+          }
+
+        } catch (error) {
+          core.setFailed(error.message);
+          throw error;
+        }
+
+        function parseJSON(value, fallback) {
+          if (!value || value === 'undefined') {
+            return fallback;
+          }
+
+          try {
+            return JSON.parse(value);
+          } catch (error) {
+            return fallback;
+          }
+        }
+
+        function parseBoolean(value) {
+          if (!value) {
+            return false;
+          }
+
+          const normalized = value.toLowerCase();
+          return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+        }
+
+        function parseInteger(value) {
+          if (!value) {
+            return null;
+          }
+
+          const parsed = parseInt(value, 10);
+          return Number.isNaN(parsed) ? null : parsed;
+        }
+
+        function parseLabels(value) {
+          if (!value) {
+            return [];
+          }
+
+          return value
+            .split(/[\n,]/)
+            .map((label) => label.trim())
+            .filter((label) => label.length > 0);
+        }
+
+        function applyTemplate(template, data) {
+          return template.replace(/{{\s*([A-Z0-9_]+)\s*}}/g, (match, key) => {
+            if (Object.prototype.hasOwnProperty.call(data, key)) {
+              return data[key] || '';
+            }
+
+            return '';
+          });
+        }
+
+        async function createSubIssueRelationship(githubClient, parentId, childId) {
+          const mutation = `
+            mutation($input: AddSubIssueInput!) {
+              addSubIssue(input: $input) {
+                subIssue {
+                  id
+                }
+              }
+            }
+          `;
+
+          await githubClient.graphql(mutation, {
+            input: {
+              issueId: parentId,
+              subIssueId: childId
+            }
+          });
+        }
+
+  - name: Assign Copilot
+    id: assign-copilot
+    if: ${{ inputs.assign_copilot == 'true' && inputs.copilot_login != '' }}
+    uses: ./.github/actions/assign-copilot
+    with:
+      issue_id: ${{ steps.create.outputs.issue_node_id }}
+      repository: ${{ inputs.owner }}/${{ inputs.repo }}
+      bot_login: ${{ inputs.copilot_login }}
+
+  - name: Add to project
+    id: project
+    if: ${{ inputs.org_login != '' && inputs.project_number != '' }}
+    uses: ./.github/actions/add-to-project
+    with:
+      issue_id: ${{ steps.create.outputs.issue_node_id }}
+      org_login: ${{ inputs.org_login }}
+      project_number: ${{ inputs.project_number }}
+      status_field: ${{ inputs.project_status_field }}
+      status_value: ${{ inputs.project_status_value }}
+
+  - name: Compute Copilot status message
+    id: copilot-msg
+    shell: bash
+    run: |
+      if [ "${{ inputs.assign_copilot }}" = "true" ]; then
+        if [ "${{ steps.assign-copilot.outputs.success }}" = "true" ]; then
+          echo "copilot_message=Copilot was assigned to this issue." >> $GITHUB_OUTPUT
+        else
+          echo "copilot_message=Copilot could not be assigned automatically." >> $GITHUB_OUTPUT
+        fi
+      else
+        echo "copilot_message=Copilot assignment not requested." >> $GITHUB_OUTPUT
+      fi

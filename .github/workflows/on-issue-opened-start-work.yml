@@ -1,0 +1,150 @@
+name: 'On Issue Opened: Start Work'
+
+on:
+  issues:
+    types: [opened]
+
+concurrency:
+  group: issue-start-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  issues: write
+  contents: read
+  pull-requests: read
+  actions: write
+
+jobs:
+  assign-copilot-and-update-status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      copilot_assigned: ${{ steps.assign-copilot.outputs.success }}
+      issue_id: ${{ github.event.issue.node_id }}
+      issue_number: ${{ github.event.issue.number }}
+      repository: ${{ github.repository }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load squad config
+        id: config
+        uses: ./.github/actions/load-squad-config
+
+      - name: Check trigger label
+        id: check-trigger
+        run: |
+          TRIGGER_LABEL="${{ steps.config.outputs.trigger_label }}"
+          ISSUE_LABELS='${{ toJSON(github.event.issue.labels.*.name) }}'
+          if echo "$ISSUE_LABELS" | jq -e --arg label "$TRIGGER_LABEL" 'map(select(. == $label)) | length > 0' > /dev/null 2>&1; then
+            echo "has_trigger=true" >> $GITHUB_OUTPUT
+            echo "Issue has trigger label: $TRIGGER_LABEL"
+          else
+            echo "has_trigger=false" >> $GITHUB_OUTPUT
+            echo "Issue does not have trigger label: $TRIGGER_LABEL — skipping"
+          fi
+
+      - name: Assign Copilot to Issue
+        id: assign-copilot
+        if: steps.check-trigger.outputs.has_trigger == 'true'
+        uses: ./.github/actions/assign-copilot
+        with:
+          issue_id: ${{ github.event.issue.node_id }}
+          repository: ${{ github.repository }}
+          bot_login: ${{ steps.config.outputs.copilot_bot_login }}
+
+      - name: Assign WIP label
+        uses: actions/github-script@v7
+        if: steps.assign-copilot.outputs.success == 'true'
+        env:
+          WIP_LABEL: ${{ steps.config.outputs.wip_label }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN  }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            await github.rest.issues.addLabels({ owner, repo, issue_number, labels: [process.env.WIP_LABEL] });
+
+      - name: Update Project Status to In Progress
+        id: copilot-update-status-to-in-progress
+        if: steps.assign-copilot.outputs.success == 'true'
+        uses: ./.github/actions/update-project-status
+        with:
+          issue_id: ${{ github.event.issue.node_id }}
+          project_number: ${{ steps.config.outputs.project_number }}
+          org_login: ${{ steps.config.outputs.org_login }}
+          status: ${{ steps.config.outputs.status_wip }}
+
+      - name: Summary
+        run: |
+          echo "### Workflow Completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Issue**: #${{ github.event.issue.number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Copilot Assigned**: ${{ steps.assign-copilot.outputs.success }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ steps.config.outputs.status_wip }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project**: ${{ steps.config.outputs.project_url }}" >> $GITHUB_STEP_SUMMARY
+
+  enable-finish-monitor:
+    name: Enable Finish Workflow Monitor
+    needs: assign-copilot-and-update-status
+    if: needs.assign-copilot-and-update-status.outputs.copilot_assigned == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check current workflow state
+        id: check-state
+        continue-on-error: true
+        run: |
+          echo "Checking workflow state..."
+
+          STATE=$(gh api repos/${{ github.repository }}/actions/workflows | \
+            jq -r '.workflows[] | select(.path == ".github/workflows/scheduled-wip-monitor.yml") | .state')
+
+          if [ -z "$STATE" ]; then
+            STATE="not_found"
+          fi
+
+          echo "WORKFLOW_STATE=$STATE" >> $GITHUB_OUTPUT
+          echo "Workflow state: $STATE"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
+
+      - name: Decide enable action
+        id: decide
+        run: |
+          STATE="${{ steps.check-state.outputs.WORKFLOW_STATE }}"
+
+          if [ "$STATE" = "disabled_manually" ] || [ "$STATE" = "disabled_inactivity" ]; then
+            echo "action=enable" >> $GITHUB_OUTPUT
+            echo "Workflow is disabled ($STATE) - will be enabled"
+          elif [ "$STATE" = "active" ]; then
+            echo "action=skip" >> $GITHUB_OUTPUT
+            echo "Workflow is already active"
+          else
+            echo "action=skip" >> $GITHUB_OUTPUT
+            echo "Unknown state ($STATE) - skipping"
+          fi
+
+      - name: Enable workflow if needed
+        if: steps.decide.outputs.action == 'enable'
+        run: |
+          set -e
+          echo "Enabling workflow..."
+          gh workflow enable ".github/workflows/scheduled-wip-monitor.yml" -R "${{ github.repository }}"
+          echo "Workflow enabled successfully"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
+
+      - name: Summary
+        run: |
+          echo "### Scheduled WIP Monitor" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **State found**: \`${{ steps.check-state.outputs.WORKFLOW_STATE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action taken**: \`${{ steps.decide.outputs.action }}\`" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.decide.outputs.action }}" = "enable" ]; then
+            echo "- **Result**: Workflow enabled and monitoring WIP issues" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Result**: No action needed" >> $GITHUB_STEP_SUMMARY
+          fi

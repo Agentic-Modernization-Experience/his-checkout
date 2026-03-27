@@ -1,0 +1,175 @@
+name: 'Add Issue to GitHub Project'
+description: 'Adds an issue to a GitHub Project V2 and optionally sets the initial status'
+
+inputs:
+  issue_id:
+    description: 'Node ID of the issue to add'
+    required: true
+  org_login:
+    description: 'Organization login that owns the project'
+    required: true
+  project_number:
+    description: 'Project number'
+    required: true
+  status_field:
+    description: 'Single-select field name used for status'
+    required: false
+    default: 'Status'
+  status_value:
+    description: 'Status option name to set after adding (leave empty to skip)'
+    required: false
+    default: ''
+
+outputs:
+  project_item_id:
+    description: 'ID of the project item that was created'
+    value: ${{ steps.add.outputs.project_item_id }}
+  success:
+    description: 'Whether the issue was added successfully'
+    value: ${{ steps.add.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Add issue to project
+    id: add
+    shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_ID: ${{ inputs.issue_id }}
+      ORG_LOGIN: ${{ inputs.org_login }}
+      PROJECT_NUMBER: ${{ inputs.project_number }}
+      STATUS_FIELD: ${{ inputs.status_field }}
+      STATUS_VALUE: ${{ inputs.status_value }}
+    run: |
+      # Fetch project ID
+      PROJECT_QUERY=$(cat <<'GRAPHQL'
+      query($org: String!, $number: Int!) {
+        organization(login: $org) {
+          projectV2(number: $number) {
+            id
+          }
+        }
+      }
+      GRAPHQL
+      )
+
+      PROJECT_RESULT=$(gh api graphql \
+        -f query="$PROJECT_QUERY" \
+        -f org="$ORG_LOGIN" \
+        -F number="$PROJECT_NUMBER")
+
+      PROJECT_ID=$(echo "$PROJECT_RESULT" | jq -r '.data.organization.projectV2.id')
+
+      if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+        echo "Project $ORG_LOGIN/$PROJECT_NUMBER not found"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
+
+      # Add issue to project
+      ADD_MUTATION=$(cat <<'GRAPHQL'
+      mutation($projectId: ID!, $contentId: ID!) {
+        addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+          item {
+            id
+          }
+        }
+      }
+      GRAPHQL
+      )
+
+      ADD_RESULT=$(gh api graphql \
+        -f query="$ADD_MUTATION" \
+        -f projectId="$PROJECT_ID" \
+        -f contentId="$ISSUE_ID")
+
+      ERRORS=$(echo "$ADD_RESULT" | jq -r '.errors // empty')
+      if [ -n "$ERRORS" ] && [ "$ERRORS" != "null" ]; then
+        echo "Error adding issue to project: $ERRORS"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
+
+      PROJECT_ITEM_ID=$(echo "$ADD_RESULT" | jq -r '.data.addProjectV2ItemById.item.id')
+      echo "Issue added to project (item: $PROJECT_ITEM_ID)"
+      echo "project_item_id=$PROJECT_ITEM_ID" >> $GITHUB_OUTPUT
+
+      # If status_value was provided, update the status
+      if [ -n "$STATUS_VALUE" ]; then
+        FIELD_QUERY=$(cat <<'GRAPHQL'
+        query($org: String!, $number: Int!, $fieldName: String!) {
+          organization(login: $org) {
+            projectV2(number: $number) {
+              field(name: $fieldName) {
+                ... on ProjectV2SingleSelectField {
+                  id
+                  options {
+                    id
+                    name
+                  }
+                }
+              }
+            }
+          }
+        }
+      GRAPHQL
+        )
+
+        FIELD_RESULT=$(gh api graphql \
+          -f query="$FIELD_QUERY" \
+          -f org="$ORG_LOGIN" \
+          -F number="$PROJECT_NUMBER" \
+          -f fieldName="$STATUS_FIELD")
+
+        FIELD_ID=$(echo "$FIELD_RESULT" | jq -r '.data.organization.projectV2.field.id')
+        OPTION_ID=$(echo "$FIELD_RESULT" | jq -r \
+          --arg status "$STATUS_VALUE" \
+          '.data.organization.projectV2.field.options[] | select(.name == $status) | .id')
+
+        if [ -z "$OPTION_ID" ] || [ "$OPTION_ID" = "null" ]; then
+          echo "Status option '$STATUS_VALUE' not found in field '$STATUS_FIELD'"
+          echo "success=true" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        UPDATE_MUTATION=$(cat <<'GRAPHQL'
+        mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+          updateProjectV2ItemFieldValue(
+            input: {
+              projectId: $projectId
+              itemId: $itemId
+              fieldId: $fieldId
+              value: { singleSelectOptionId: $optionId }
+            }
+          ) {
+            projectV2Item {
+              id
+            }
+          }
+        }
+      GRAPHQL
+        )
+
+        UPDATE_RESULT=$(gh api graphql \
+          -f query="$UPDATE_MUTATION" \
+          -f projectId="$PROJECT_ID" \
+          -f itemId="$PROJECT_ITEM_ID" \
+          -f fieldId="$FIELD_ID" \
+          -f optionId="$OPTION_ID")
+
+        UPDATE_ERRORS=$(echo "$UPDATE_RESULT" | jq -r '.errors // empty')
+        if [ -n "$UPDATE_ERRORS" ] && [ "$UPDATE_ERRORS" != "null" ]; then
+          echo "Error updating status: $UPDATE_ERRORS"
+          echo "success=true" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        echo "Status updated to '$STATUS_VALUE'"
+      fi
+
+      echo "success=true" >> $GITHUB_OUTPUT
+
+branding:
+  icon: 'plus-circle'
+  color: 'blue'

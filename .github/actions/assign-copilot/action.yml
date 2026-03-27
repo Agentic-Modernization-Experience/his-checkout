@@ -1,0 +1,132 @@
+name: 'Assign Copilot to Issue'
+description: 'Assigns the GitHub Copilot bot to an issue'
+
+inputs:
+  issue_id:
+    description: 'Node ID of the issue'
+    required: true
+  repository:
+    description: 'Repository in format owner/repo'
+    required: true
+  bot_login:
+    description: 'Login of the Copilot bot to assign'
+    required: true
+
+outputs:
+  success:
+    description: 'Whether Copilot was successfully assigned'
+    value: ${{ steps.assign.outputs.success }}
+  bot_id:
+    description: 'Node ID of the Copilot bot'
+    value: ${{ steps.assign.outputs.bot_id }}
+  bot_login:
+    description: 'Login of the Copilot bot'
+    value: ${{ steps.assign.outputs.bot_login }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Assign Copilot
+    id: assign
+    shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_ID: ${{ inputs.issue_id }}
+      REPOSITORY: ${{ inputs.repository }}
+      BOT_LOGIN: ${{ inputs.bot_login }}
+    run: |
+      # Extract owner and repo
+      OWNER=$(echo "$REPOSITORY" | cut -d'/' -f1)
+      REPO=$(echo "$REPOSITORY" | cut -d'/' -f2)
+
+      echo "Checking Copilot availability in repository $OWNER/$REPO (bot: $BOT_LOGIN)..."
+
+      # Query to fetch suggested actors
+      ACTORS_QUERY=$(cat <<'GRAPHQL'
+      query($owner: String!, $repo: String!) {
+        repository(owner: $owner, name: $repo) {
+          suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) {
+            nodes {
+              login
+              __typename
+              ... on Bot {
+                id
+              }
+              ... on User {
+                id
+              }
+            }
+          }
+        }
+      }
+      GRAPHQL
+      )
+
+      # Execute query
+      RESULT=$(gh api graphql \
+        -f query="$ACTORS_QUERY" \
+        -f owner="$OWNER" \
+        -f repo="$REPO")
+
+      # Find the Copilot bot by configured login
+      COPILOT_DATA=$(echo "$RESULT" | jq -r --arg login "$BOT_LOGIN" '.data.repository.suggestedActors.nodes[] | select(.login == $login)')
+
+      if [ -z "$COPILOT_DATA" ] || [ "$COPILOT_DATA" = "null" ]; then
+        echo "Copilot agent ($BOT_LOGIN) not found in suggested actors"
+        echo "This may mean that:"
+        echo "   1. Copilot is not enabled in this repository"
+        echo "   2. The token does not have adequate permissions (needs PAT)"
+        echo "   3. The repository does not have access to Copilot Enterprise/Business"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
+
+      BOT_ID=$(echo "$COPILOT_DATA" | jq -r '.id')
+      BOT_LOGIN=$(echo "$COPILOT_DATA" | jq -r '.login')
+
+      echo "Copilot agent ($BOT_LOGIN) found with ID: $BOT_ID"
+
+      # Mutation to assign the bot (addAssignees preserves existing assignees)
+      ASSIGN_MUTATION=$(cat <<'GRAPHQL'
+      mutation($issueId: ID!, $botId: ID!) {
+        addAssigneesToAssignable(input: {assignableId: $issueId, assigneeIds: [$botId]}) {
+          assignable {
+            ... on Issue {
+              id
+              title
+              assignees(first: 10) {
+                nodes {
+                  login
+                }
+              }
+            }
+          }
+        }
+      }
+      GRAPHQL
+      )
+
+      # Execute mutation
+      ASSIGN_RESULT=$(gh api graphql \
+        -f query="$ASSIGN_MUTATION" \
+        -f issueId="$ISSUE_ID" \
+        -f botId="$BOT_ID")
+
+      # Validate result
+      ERRORS=$(echo "$ASSIGN_RESULT" | jq -r '.errors // empty')
+      if [ -n "$ERRORS" ] && [ "$ERRORS" != "null" ]; then
+        echo "Error assigning Copilot: $ERRORS"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
+
+      echo "Copilot successfully assigned to issue!"
+
+      # Outputs
+      echo "success=true" >> $GITHUB_OUTPUT
+      echo "bot_id=$BOT_ID" >> $GITHUB_OUTPUT
+      echo "bot_login=$BOT_LOGIN" >> $GITHUB_OUTPUT
+
+branding:
+  icon: 'user-plus'
+  color: 'purple'

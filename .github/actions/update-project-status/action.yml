@@ -1,0 +1,151 @@
+name: 'Update GitHub Project Status'
+description: 'Updates the status of an issue in a GitHub Project V2'
+
+inputs:
+  issue_id:
+    description: 'Node ID of the issue'
+    required: true
+  project_number:
+    description: 'Project number'
+    required: true
+  org_login:
+    description: 'Organization login'
+    required: true
+  status:
+    description: 'Status to set (Todo, In Progress, Review, Done)'
+    required: true
+  status_field:
+    description: 'Single-select field name used for status'
+    required: false
+    default: 'Status'
+
+outputs:
+  success:
+    description: 'Whether the status was successfully updated'
+    value: ${{ steps.update.outputs.success }}
+  project_item_id:
+    description: 'ID of the project item that was updated'
+    value: ${{ steps.update.outputs.project_item_id }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Update Project Status
+    id: update
+    shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_ID: ${{ inputs.issue_id }}
+      PROJECT_NUMBER: ${{ inputs.project_number }}
+      ORG_LOGIN: ${{ inputs.org_login }}
+      TARGET_STATUS: ${{ inputs.status }}
+      STATUS_FIELD: ${{ inputs.status_field }}
+    run: |
+      # Optimized query - direct lookup by issueId
+      PROJECT_QUERY=$(cat <<GRAPHQL
+      query(\$org: String!, \$number: Int!, \$issueId: ID!) {
+        organization(login: \$org) {
+          projectV2(number: \$number) {
+            id
+            field(name: "$STATUS_FIELD") {
+              ... on ProjectV2SingleSelectField {
+                id
+                options {
+                  id
+                  name
+                }
+              }
+            }
+          }
+        }
+        node(id: \$issueId) {
+          ... on Issue {
+            projectItems(first: 10) {
+              nodes {
+                id
+                project {
+                  number
+                }
+              }
+            }
+          }
+        }
+      }
+      GRAPHQL
+      )
+
+      # Execute query
+      RESULT=$(gh api graphql \
+        -f query="$PROJECT_QUERY" \
+        -f org="$ORG_LOGIN" \
+        -F number="$PROJECT_NUMBER" \
+        -f issueId="$ISSUE_ID")
+
+      # Extract IDs using jq
+      PROJECT_ID=$(echo "$RESULT" | jq -r '.data.organization.projectV2.id')
+      STATUS_FIELD_ID=$(echo "$RESULT" | jq -r '.data.organization.projectV2.field.id')
+
+      # Find the project item
+      PROJECT_ITEM_ID=$(echo "$RESULT" | jq -r \
+        --arg pnum "$PROJECT_NUMBER" \
+        '.data.node.projectItems.nodes[] | select(.project.number == ($pnum | tonumber)) | .id')
+
+      if [ -z "$PROJECT_ITEM_ID" ] || [ "$PROJECT_ITEM_ID" = "null" ]; then
+        echo "Issue not found in project #$PROJECT_NUMBER"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
+
+      # Find the status option ID
+      STATUS_OPTION_ID=$(echo "$RESULT" | jq -r \
+        --arg status "$TARGET_STATUS" \
+        '.data.organization.projectV2.field.options[] | select(.name == $status) | .id')
+
+      if [ -z "$STATUS_OPTION_ID" ] || [ "$STATUS_OPTION_ID" = "null" ]; then
+        echo "Status option '$TARGET_STATUS' not found"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
+
+      # Mutation to update status
+      UPDATE_MUTATION=$(cat <<'GRAPHQL'
+      mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+        updateProjectV2ItemFieldValue(
+          input: {
+            projectId: $projectId
+            itemId: $itemId
+            fieldId: $fieldId
+            value: { singleSelectOptionId: $optionId }
+          }
+        ) {
+          projectV2Item {
+            id
+          }
+        }
+      }
+      GRAPHQL
+      )
+
+      # Execute mutation
+      MUTATION_RESULT=$(gh api graphql \
+        -f query="$UPDATE_MUTATION" \
+        -f projectId="$PROJECT_ID" \
+        -f itemId="$PROJECT_ITEM_ID" \
+        -f fieldId="$STATUS_FIELD_ID" \
+        -f optionId="$STATUS_OPTION_ID")
+
+      # Validate mutation result
+      MUTATION_ERRORS=$(echo "$MUTATION_RESULT" | jq -r '.errors // empty')
+      if [ -n "$MUTATION_ERRORS" ] && [ "$MUTATION_ERRORS" != "null" ]; then
+        echo "Error updating status: $MUTATION_ERRORS"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
+
+      echo "Issue status updated to '$TARGET_STATUS'"
+      echo "success=true" >> $GITHUB_OUTPUT
+      echo "project_item_id=$PROJECT_ITEM_ID" >> $GITHUB_OUTPUT
+
+branding:
+  icon: 'check-circle'
+  color: 'green'

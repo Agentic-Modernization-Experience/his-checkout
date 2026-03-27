@@ -1,0 +1,197 @@
+name: 'Import External Task'
+description: |
+  Imports a single task from an external board (Jira/Kanbanize) as a GitHub Issue with idempotency check.
+  This is a utility action for importing individual tasks programmatically.
+  For bulk import, use the "Import from External Board" workflow instead — it connects to the
+  external board API automatically, fetches all tasks, and handles idempotency in bulk.
+  All configuration (org, project, trigger label) is auto-loaded from squad-config.json.
+  GITHUB_TOKEN is used automatically — no input needed.
+
+inputs:
+  source_type:
+    description: 'External board provider (jira or kanbanize)'
+    required: true
+  source_id:
+    description: 'Unique identifier in the external board (e.g. PROJ-123 or card ID)'
+    required: true
+  title:
+    description: 'Task title'
+    required: true
+  description_markdown:
+    description: 'Task description in Markdown'
+    required: false
+    default: ''
+  original_url:
+    description: 'URL to the original task in the external board'
+    required: false
+    default: ''
+  priority:
+    description: 'Priority (informational, added to issue body)'
+    required: false
+    default: ''
+  extra_labels:
+    description: 'Additional labels (comma-separated), beyond the trigger label'
+    required: false
+    default: ''
+  milestone_number:
+    description: 'Milestone number to assign to the created issue'
+    required: false
+    default: ''
+
+outputs:
+  issue_number:
+    description: 'Number of the created (or existing) issue'
+    value: ${{ steps.import.outputs.issue_number }}
+  issue_url:
+    description: 'URL of the created (or existing) issue'
+    value: ${{ steps.import.outputs.issue_url }}
+  issue_node_id:
+    description: 'Node ID of the created issue'
+    value: ${{ steps.import.outputs.issue_node_id }}
+  skipped:
+    description: 'Whether the import was skipped (task already exists)'
+    value: ${{ steps.import.outputs.skipped }}
+  created:
+    description: 'Whether a new issue was created'
+    value: ${{ steps.import.outputs.created }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Load squad config
+    id: config
+    uses: ./.github/actions/load-squad-config
+
+  - name: Import external task
+    id: import
+    uses: actions/github-script@v7
+    env:
+      SOURCE_TYPE: ${{ inputs.source_type }}
+      SOURCE_ID: ${{ inputs.source_id }}
+      TITLE_JSON: ${{ toJSON(inputs.title) }}
+      DESCRIPTION_JSON: ${{ toJSON(inputs.description_markdown) }}
+      ORIGINAL_URL: ${{ inputs.original_url }}
+      PRIORITY: ${{ inputs.priority }}
+      EXTRA_LABELS: ${{ inputs.extra_labels }}
+      MILESTONE_NUMBER: ${{ inputs.milestone_number }}
+      TRIGGER_LABEL: ${{ steps.config.outputs.trigger_label }}
+    with:
+      github-token: ${{ github.token }}
+      result-encoding: string
+      script: |
+        const { owner, repo } = context.repo;
+        const sourceType = process.env.SOURCE_TYPE.trim();
+        const sourceId = process.env.SOURCE_ID.trim();
+        const title = JSON.parse(process.env.TITLE_JSON || '""').trim();
+        const description = JSON.parse(process.env.DESCRIPTION_JSON || '""');
+        const originalUrl = (process.env.ORIGINAL_URL || '').trim();
+        const priority = (process.env.PRIORITY || '').trim();
+        const extraLabels = (process.env.EXTRA_LABELS || '').split(',').map(l => l.trim()).filter(Boolean);
+        const milestoneNumber = parseInteger(process.env.MILESTONE_NUMBER);
+        const triggerLabel = process.env.TRIGGER_LABEL.trim();
+
+        const sourceMarker = `<!-- source: ${sourceType}:${sourceId} -->`;
+
+        // --- Idempotency check ---
+        // Search existing issues (open + closed) for the source marker
+        core.info(`Checking idempotency for ${sourceType}:${sourceId}...`);
+
+        let page = 1;
+        let found = null;
+        while (!found) {
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner,
+            repo,
+            labels: triggerLabel,
+            state: 'all',
+            per_page: 100,
+            page
+          });
+
+          if (issues.length === 0) break;
+
+          for (const issue of issues) {
+            if (issue.body && issue.body.includes(sourceMarker)) {
+              found = issue;
+              break;
+            }
+          }
+
+          if (issues.length < 100) break;
+          page++;
+        }
+
+        if (found) {
+          core.info(`Task ${sourceType}:${sourceId} already imported as #${found.number} — skipping`);
+          core.setOutput('issue_number', String(found.number));
+          core.setOutput('issue_url', found.html_url);
+          core.setOutput('issue_node_id', found.node_id);
+          core.setOutput('skipped', 'true');
+          core.setOutput('created', 'false');
+          return;
+        }
+
+        // --- Build issue body ---
+        let body = '';
+
+        // Source metadata (invisible in rendered Markdown)
+        body += `${sourceMarker}\n\n`;
+
+        // Header with origin info
+        body += `> **Imported from ${sourceType.charAt(0).toUpperCase() + sourceType.slice(1)}**: \`${sourceId}\``;
+        if (originalUrl) {
+          body += ` — [View original](${originalUrl})`;
+        }
+        body += '\n';
+        if (priority) {
+          body += `> **Priority**: ${priority}\n`;
+        }
+        body += '\n---\n\n';
+
+        // Task description
+        if (description && description.trim()) {
+          body += description.trim();
+        } else {
+          body += '*No description provided in the source task.*';
+        }
+
+        // --- Create issue ---
+        const labels = [triggerLabel, ...extraLabels];
+
+        core.info(`Creating issue: ${title}`);
+        const { data: issue } = await github.rest.issues.create({
+          owner,
+          repo,
+          title,
+          body,
+          labels,
+          milestone: milestoneNumber || undefined
+        });
+
+        core.info(`Issue created: #${issue.number} — ${issue.html_url}`);
+        core.setOutput('issue_number', String(issue.number));
+        core.setOutput('issue_url', issue.html_url);
+        core.setOutput('issue_node_id', issue.node_id);
+        core.setOutput('skipped', 'false');
+        core.setOutput('created', 'true');
+
+        function parseInteger(value) {
+          if (!value) {
+            return null;
+          }
+
+          const parsed = parseInt(value, 10);
+          return Number.isNaN(parsed) ? null : parsed;
+        }
+
+  - name: Add to project
+    if: ${{ steps.import.outputs.created == 'true' && steps.config.outputs.org_login != '' && steps.config.outputs.project_number != '' }}
+    uses: ./.github/actions/add-to-project
+    with:
+      issue_id: ${{ steps.import.outputs.issue_node_id }}
+      org_login: ${{ steps.config.outputs.org_login }}
+      project_number: ${{ steps.config.outputs.project_number }}
+
+branding:
+  icon: 'download'
+  color: 'orange'

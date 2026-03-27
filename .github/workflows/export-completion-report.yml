@@ -1,0 +1,241 @@
+name: 'Export Completion Report'
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_filter:
+        description: 'Filter by import source'
+        required: false
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - jira
+          - kanbanize
+      status_filter:
+        description: 'Filter by issue status'
+        required: false
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - done
+          - open
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/squad-config.json
+            .github/actions/load-squad-config
+
+      - name: Load squad config
+        id: config
+        uses: ./.github/actions/load-squad-config
+
+      - name: Generate completion report
+        id: report
+        uses: actions/github-script@v7
+        env:
+          TRIGGER_LABEL: ${{ steps.config.outputs.trigger_label }}
+          SOURCE_FILTER: ${{ inputs.source_filter }}
+          STATUS_FILTER: ${{ inputs.status_filter }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const triggerLabel = process.env.TRIGGER_LABEL;
+            const sourceFilter = process.env.SOURCE_FILTER || 'all';
+            const statusFilter = process.env.STATUS_FILTER || 'all';
+
+            const stateParam = statusFilter === 'done' ? 'closed' : statusFilter === 'open' ? 'open' : 'all';
+
+            // Fetch all issues with trigger label
+            let allIssues = [];
+            let page = 1;
+            while (true) {
+              const { data: issues } = await github.rest.issues.listForRepo({
+                owner, repo,
+                labels: triggerLabel,
+                state: stateParam,
+                per_page: 100,
+                page
+              });
+              if (issues.length === 0) break;
+              allIssues = allIssues.concat(issues);
+              if (issues.length < 100) break;
+              page++;
+            }
+
+            // Filter to only imported issues (those with source marker)
+            const sourcePattern = /<!-- source: (\w+):(.+?) -->/;
+            const importedIssues = allIssues
+              .filter(issue => issue.body && sourcePattern.test(issue.body))
+              .map(issue => {
+                const match = issue.body.match(sourcePattern);
+                return {
+                  ...issue,
+                  source_type: match[1],
+                  source_id: match[2]
+                };
+              })
+              .filter(issue => sourceFilter === 'all' || issue.source_type === sourceFilter);
+
+            core.info(`Found ${importedIssues.length} imported issues (filter: source=${sourceFilter}, status=${statusFilter})`);
+
+            if (importedIssues.length === 0) {
+              core.info('No imported issues found matching filters');
+              core.setOutput('report_generated', 'false');
+              core.setOutput('total_issues', '0');
+              fs.writeFileSync('completion-report.csv', 'No imported issues found matching the filters.\n');
+              return;
+            }
+
+            // For each issue, find linked PRs
+            const rows = [];
+            for (const issue of importedIssues) {
+              let prNumber = '';
+              let prUrl = '';
+              let mergedDate = '';
+
+              // Find linked PRs via timeline events
+              try {
+                const { data: timeline } = await github.rest.issues.listEventsForTimeline({
+                  owner, repo,
+                  issue_number: issue.number,
+                  per_page: 100
+                });
+
+                for (const event of timeline) {
+                  if (event.event === 'cross-referenced' && event.source?.issue?.pull_request) {
+                    const linkedPr = event.source.issue;
+                    prNumber = `#${linkedPr.number}`;
+                    prUrl = linkedPr.html_url;
+
+                    // Check if PR was merged
+                    if (linkedPr.state === 'closed' && linkedPr.pull_request?.merged_at) {
+                      mergedDate = new Date(linkedPr.pull_request.merged_at).toISOString().split('T')[0];
+                    }
+                    break;
+                  }
+                }
+              } catch (e) {
+                core.warning(`Failed to fetch timeline for #${issue.number}: ${e.message}`);
+              }
+
+              // Extract original URL from body
+              const urlMatch = issue.body.match(/\[View original\]\(([^)]+)\)/);
+              const originalUrl = urlMatch ? urlMatch[1] : '';
+
+              rows.push({
+                source_type: issue.source_type,
+                source_id: issue.source_id,
+                original_url: originalUrl,
+                github_issue: `#${issue.number}`,
+                github_issue_url: issue.html_url,
+                title: issue.title.replace(/,/g, ';'),
+                status: issue.state === 'closed' ? 'Done' : 'Open',
+                pr: prNumber,
+                pr_url: prUrl,
+                merged_date: mergedDate
+              });
+
+              // Small delay to avoid rate limits
+              await new Promise(r => setTimeout(r, 200));
+            }
+
+            // Sort: Done first, then by source_id
+            rows.sort((a, b) => {
+              if (a.status !== b.status) return a.status === 'Done' ? -1 : 1;
+              return a.source_id.localeCompare(b.source_id);
+            });
+
+            // Generate CSV
+            const csvHeader = 'Source Type,Source ID,Original URL,GitHub Issue,GitHub Issue URL,Title,Status,PR,PR URL,Merged Date';
+            const csvRows = rows.map(r =>
+              `${r.source_type},${r.source_id},${r.original_url},${r.github_issue},${r.github_issue_url},"${r.title}",${r.status},${r.pr},${r.pr_url},${r.merged_date}`
+            );
+            const csv = [csvHeader, ...csvRows].join('\n');
+            fs.writeFileSync('completion-report.csv', csv);
+
+            // Generate Markdown summary
+            const doneCount = rows.filter(r => r.status === 'Done').length;
+            const openCount = rows.filter(r => r.status === 'Open').length;
+
+            let md = `# Completion Report\n\n`;
+            md += `**Generated**: ${new Date().toISOString().split('T')[0]}\n`;
+            md += `**Repository**: ${owner}/${repo}\n`;
+            md += `**Source filter**: ${sourceFilter}\n`;
+            md += `**Status filter**: ${statusFilter}\n\n`;
+            md += `## Summary\n\n`;
+            md += `| Metric | Count |\n|---|---|\n`;
+            md += `| Total imported tasks | ${rows.length} |\n`;
+            md += `| Completed (Done) | ${doneCount} |\n`;
+            md += `| Still in progress (Open) | ${openCount} |\n\n`;
+            md += `## Tasks\n\n`;
+            md += `| Source | Source ID | GitHub Issue | Status | PR | Merged |\n`;
+            md += `|---|---|---|---|---|---|\n`;
+            for (const r of rows) {
+              const sourceLink = r.original_url ? `[${r.source_id}](${r.original_url})` : r.source_id;
+              const issueLink = `[${r.github_issue}](${r.github_issue_url})`;
+              const prLink = r.pr_url ? `[${r.pr}](${r.pr_url})` : '-';
+              md += `| ${r.source_type} | ${sourceLink} | ${issueLink} | ${r.status} | ${prLink} | ${r.merged_date || '-'} |\n`;
+            }
+
+            fs.writeFileSync('completion-report.md', md);
+
+            core.setOutput('report_generated', 'true');
+            core.setOutput('total_issues', rows.length);
+            core.setOutput('done_count', doneCount);
+            core.setOutput('open_count', openCount);
+
+            core.info(`\nReport generated: ${rows.length} tasks (${doneCount} done, ${openCount} open)`);
+
+      - name: Upload CSV report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: completion-report-csv
+          path: completion-report.csv
+          retention-days: 30
+
+      - name: Upload Markdown report
+        if: steps.report.outputs.report_generated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: completion-report-markdown
+          path: completion-report.md
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Export Completion Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Source filter**: ${{ inputs.source_filter }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status filter**: ${{ inputs.status_filter }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total imported tasks**: ${{ steps.report.outputs.total_issues || '0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Completed**: ${{ steps.report.outputs.done_count || '0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Open**: ${{ steps.report.outputs.open_count || '0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "Download the **completion-report-csv** or **completion-report-markdown** artifact from the Artifacts section above." >> $GITHUB_STEP_SUMMARY
+          echo "Use this report as a checklist to update the original board (Jira/Kanbanize)." >> $GITHUB_STEP_SUMMARY
+
+          if [[ -f "completion-report.md" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            cat completion-report.md >> $GITHUB_STEP_SUMMARY
+          fi

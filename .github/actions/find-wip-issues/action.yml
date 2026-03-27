@@ -1,0 +1,82 @@
+name: Find WIP Issues
+description: Paginates issues by label and returns a simplified list.
+
+inputs:
+  label:
+    description: Label to search for.
+    required: true
+  state:
+    description: Issue state filter (open|closed|all).
+    required: false
+    default: open
+  per_page:
+    description: Page size for search (max 100).
+    required: false
+    default: '100'
+  max_pages:
+    description: Maximum number of pages to paginate (loop protection).
+    required: false
+    default: '10'
+
+outputs:
+  has_issues:
+    description: 'true/false indicating whether issues were found.'
+    value: ${{ steps.find.outputs.has_issues }}
+  issues:
+    description: 'JSON array of objects {number,id,title}.'
+    value: ${{ steps.find.outputs.issues }}
+  total_count:
+    description: 'Total number of issues found.'
+    value: ${{ steps.find.outputs.total_count }}
+
+runs:
+  using: composite
+  steps:
+  - name: Find paginated issues
+    id: find
+    uses: actions/github-script@v7
+    with:
+      github-token: ${{ github.token }}
+      script: |
+        const { owner, repo } = context.repo;
+        const label = `${{ inputs.label }}`;
+        const state = `${{ inputs.state }}`;
+        const perPage = Math.min(parseInt(`${{ inputs.per_page }}` || '100', 10), 100);
+        const maxPages = Math.min(parseInt(`${{ inputs.max_pages }}` || '10', 10), 50);
+
+        console.log(`Paginating issues: label='${label}', state='${state}', per_page=${perPage}, max_pages=${maxPages}`);
+
+        let page = 1;
+        const aggregated = [];
+        while (page <= maxPages) {
+          const resp = await github.rest.issues.listForRepo({ owner, repo, labels: label, state, per_page: perPage, page });
+          const data = resp.data.filter(item => !item.pull_request); // ensure only issues
+          console.log(`Page ${page}: ${data.length} issues (raw=${resp.data.length})`);
+          aggregated.push(...data);
+          if (resp.data.length < perPage) {
+            break; // last page
+          }
+          page++;
+        }
+
+          // Remove duplicates by number (defensive)
+        const uniqueMap = new Map();
+        aggregated.forEach(issue => { if (!uniqueMap.has(issue.number)) uniqueMap.set(issue.number, issue); });
+        const unique = Array.from(uniqueMap.values());
+
+        console.log(`Total accumulated: ${unique.length}`);
+
+        if (unique.length === 0) {
+          core.setOutput('has_issues', 'false');
+          core.setOutput('issues', '[]');
+          core.setOutput('total_count', 0);
+          console.log('No issues found.');
+          return;
+        }
+
+        const simplified = unique.map(issue => ({ number: issue.number, id: issue.node_id, title: issue.title }));
+        core.setOutput('has_issues', 'true');
+        core.setOutput('issues', JSON.stringify(simplified));
+        core.setOutput('total_count', simplified.length);
+        console.log('Issues:');
+        simplified.forEach(i => console.log(`  - #${i.number}: ${i.title}`));

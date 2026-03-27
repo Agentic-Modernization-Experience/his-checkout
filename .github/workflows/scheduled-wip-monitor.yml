@@ -1,0 +1,468 @@
+name: 'Scheduled WIP Monitor'
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  actions: write
+
+concurrency:
+  group: scheduled-wip-monitor
+  cancel-in-progress: false
+
+jobs:
+  load-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      org_login: ${{ steps.config.outputs.org_login }}
+      project_number: ${{ steps.config.outputs.project_number }}
+      project_url: ${{ steps.config.outputs.project_url }}
+      wip_label: ${{ steps.config.outputs.wip_label }}
+      review_label: ${{ steps.config.outputs.review_label }}
+      copilot_pr_author: ${{ steps.config.outputs.copilot_pr_author }}
+      project_status_field: ${{ steps.config.outputs.project_status_field }}
+      human_reviewers: ${{ steps.config.outputs.human_reviewers }}
+      wip_timeout_hours: ${{ steps.config.outputs.wip_timeout_hours }}
+      status_review: ${{ steps.config.outputs.status_review }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/squad-config.json
+            .github/actions/load-squad-config
+
+      - name: Load squad config
+        id: config
+        uses: ./.github/actions/load-squad-config
+
+  check-wip-issues:
+    needs: load-config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      issues_to_process: ${{ steps.find-wip-issues.outputs.issues }}
+      has_issues: ${{ steps.find-wip-issues.outputs.has_issues }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/actions/find-wip-issues
+
+      - name: Find issues with WIP label
+        id: find-wip-issues
+        uses: ./.github/actions/find-wip-issues
+        with:
+          label: ${{ needs.load-config.outputs.wip_label }}
+          state: open
+          per_page: 100
+          max_pages: 10
+
+      - name: Summary - Check WIP Issues
+        run: |
+          echo "### Check WIP Issues - Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Has Issues**: ${{ steps.find-wip-issues.outputs.has_issues }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Issues Found**: " >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.find-wip-issues.outputs.issues }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Parse and display issues in a readable format
+          ISSUES='${{ steps.find-wip-issues.outputs.issues }}'
+          if [ "$ISSUES" != "[]" ] && [ -n "$ISSUES" ]; then
+            echo "#### Issues to Process:" >> $GITHUB_STEP_SUMMARY
+            echo "$ISSUES" | jq -r '.[] | "- **#\(.number)**: \(.title)"' >> $GITHUB_STEP_SUMMARY || echo "- Raw: $ISSUES" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "#### No WIP issues found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  disable-workflow-when-no-wip:
+    needs: check-wip-issues
+    if: needs.check-wip-issues.outputs.has_issues == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Disable workflow schedule when no WIP issues remain
+        id: disable
+        run: |
+          echo "No WIP issues found - disabling workflow..."
+
+          # Get the workflow file name from the workflow path
+          # github.workflow_ref format: owner/repo/.github/workflows/file.yml@refs/heads/branch
+          WORKFLOW_FILE=$(echo "${{ github.workflow_ref }}" | cut -d'@' -f1 | sed 's|.*/||')
+          echo "Workflow file: $WORKFLOW_FILE"
+
+          # Export to GITHUB_OUTPUT for use in summary
+          echo "workflow_file=$WORKFLOW_FILE" >> $GITHUB_OUTPUT
+
+          # Use GitHub CLI to disable the workflow (official method)
+          gh workflow disable "$WORKFLOW_FILE" -R "${{ github.repository }}"
+
+          echo "Workflow disabled successfully"
+          echo "To re-enable: gh workflow enable \"$WORKFLOW_FILE\" -R \"${{ github.repository }}\""
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "### Workflow Auto-Disabled" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Reason**: No WIP issues found" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action**: Workflow disabled via GitHub CLI" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow File**: ${{ steps.disable.outputs.workflow_file }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Re-enable**: \`gh workflow enable ${{ steps.disable.outputs.workflow_file }} -R ${{ github.repository }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Alternative**: Enable via GitHub UI (Actions tab → Workflow → Enable)" >> $GITHUB_STEP_SUMMARY
+
+  finalize:
+    needs: [load-config, check-wip-issues]
+    if: needs.check-wip-issues.outputs.has_issues == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PROJECT_NUMBER: ${{ needs.load-config.outputs.project_number }}
+      ORG_LOGIN: ${{ needs.load-config.outputs.org_login }}
+      PROJECT_URL: ${{ needs.load-config.outputs.project_url }}
+      WIP_LABEL: ${{ needs.load-config.outputs.wip_label }}
+      REVIEW_LABEL: ${{ needs.load-config.outputs.review_label }}
+      COPILOT_PR_AUTHOR: ${{ needs.load-config.outputs.copilot_pr_author }}
+      PROJECT_STATUS_FIELD: ${{ needs.load-config.outputs.project_status_field }}
+      HUMAN_REVIEWERS: ${{ needs.load-config.outputs.human_reviewers }}
+      WIP_TIMEOUT_HOURS: ${{ needs.load-config.outputs.wip_timeout_hours }}
+      STATUS_REVIEW: ${{ needs.load-config.outputs.status_review }}
+    strategy:
+      matrix:
+        issue: ${{ fromJson(needs.check-wip-issues.outputs.issues_to_process) }}
+      max-parallel: 5
+      fail-fast: false
+
+    steps:
+      - name: Check if Copilot workflow completed for issue
+        id: check-workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issueNumber = ${{ matrix.issue.number }};
+            const { owner, repo } = context.repo;
+
+            console.log(`Checking Copilot workflow status for issue #${issueNumber}...`);
+
+            try {
+              // Get the issue to find associated PR
+              const issue = await github.rest.issues.get({
+                owner,
+                repo,
+                issue_number: issueNumber
+              });
+
+              // Look for PR in timeline events
+              const timeline = await github.rest.issues.listEventsForTimeline({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                per_page: 100
+              });
+
+              // Find cross-referenced PR created by Copilot
+              let prNumber = null;
+              for (const event of timeline.data) {
+                if (event.event === 'cross-referenced' &&
+                    event.source?.issue?.pull_request &&
+                    event.source?.issue?.user?.login === process.env.COPILOT_PR_AUTHOR) {
+                  prNumber = event.source.issue.number;
+                  console.log(`Found Copilot PR #${prNumber} for issue #${issueNumber}`);
+                  break;
+                }
+              }
+
+              if (!prNumber) {
+                console.log(`No Copilot PR found yet for issue #${issueNumber}`);
+                core.setOutput('workflow_completed', 'false');
+                return;
+              }
+
+              core.setOutput('pr_number', prNumber);
+
+              // Get PR details
+              const pr = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: prNumber
+              });
+
+              // Check if PR is still open (workflow might still be running)
+              if (pr.data.state === 'open') {
+                // Check workflow runs for the PR's head branch (any event type)
+                const runs = await github.rest.actions.listWorkflowRunsForRepo({
+                  owner,
+                  repo,
+                  branch: pr.data.head.ref,
+                  per_page: 20
+                });
+
+                // Look for Copilot coding agent workflow (dynamic or push events)
+                const copilotRuns = runs.data.workflow_runs.filter(run =>
+                  (run.name && run.name.toLowerCase().includes('copilot')) ||
+                  (run.path && run.path.includes('copilot'))
+                );
+
+                if (copilotRuns.length > 0) {
+                  const latestRun = copilotRuns[0];
+                  console.log(`Latest Copilot workflow: ${latestRun.status} (${latestRun.conclusion})`);
+
+                  if (latestRun.status === 'completed' && latestRun.conclusion === 'success') {
+                    console.log(`Copilot workflow completed successfully for issue #${issueNumber}`);
+                    core.setOutput('workflow_completed', 'true');
+                    core.setOutput('workflow_run_id', latestRun.id);
+                  } else {
+                    console.log(`Copilot workflow still running or failed for issue #${issueNumber}`);
+                    core.setOutput('workflow_completed', 'false');
+                  }
+                } else {
+                  console.log(`No Copilot workflow runs found for PR #${prNumber}`);
+                  core.setOutput('workflow_completed', 'false');
+                }
+              } else {
+                console.log(`PR #${prNumber} is ${pr.data.state}, skipping`);
+                core.setOutput('workflow_completed', 'false');
+              }
+
+            } catch (error) {
+              console.error(`Error checking workflow: ${error.message}`);
+              core.setOutput('workflow_completed', 'false');
+            }
+
+      - name: Get PR and Issue IDs
+        id: final
+        if: steps.check-workflow.outputs.workflow_completed == 'true'
+        run: |
+          echo "issue_number=${{ matrix.issue.number }}" >> $GITHUB_OUTPUT
+          echo "issue_id=${{ matrix.issue.id }}" >> $GITHUB_OUTPUT
+          echo "pr_number=${{ steps.check-workflow.outputs.pr_number }}" >> $GITHUB_OUTPUT
+
+          echo "Processing: Issue #${{ matrix.issue.number }}, PR #${{ steps.check-workflow.outputs.pr_number }}"
+
+      - name: Check for AI-AGENT_REVIEW label (idempotency)
+        id: check_label
+        if: steps.final.outputs.issue_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issueNumber = Number('${{ steps.final.outputs.issue_number }}');
+            const { owner, repo } = context.repo;
+
+            try {
+              const issue = await github.rest.issues.get({
+                owner,
+                repo,
+                issue_number: issueNumber
+              });
+
+              const hasReviewLabel = issue.data.labels.some(label =>
+                label.name === process.env.REVIEW_LABEL
+              );
+
+              const hasWipLabel = issue.data.labels.some(label =>
+                label.name === process.env.WIP_LABEL
+              );
+
+              core.setOutput('has_review_label', hasReviewLabel);
+              core.setOutput('has_wip_label', hasWipLabel);
+
+              console.log(`Labels: ${process.env.REVIEW_LABEL}=${hasReviewLabel}, ${process.env.WIP_LABEL}=${hasWipLabel}`);
+
+              if (hasReviewLabel) {
+                console.log(`Issue already has ${process.env.REVIEW_LABEL} label, skipping update`);
+              }
+            } catch (error) {
+              console.error(`Error checking labels: ${error.message}`);
+              core.setOutput('has_review_label', 'false');
+              core.setOutput('has_wip_label', 'false');
+            }
+
+      - name: Update Project Status to Review
+        if: |
+          steps.final.outputs.issue_id != '' &&
+          steps.check_label.outputs.has_review_label != 'true'
+        uses: ./.github/actions/update-project-status
+        with:
+          issue_id: ${{ steps.final.outputs.issue_id }}
+          project_number: ${{ env.PROJECT_NUMBER }}
+          org_login: ${{ env.ORG_LOGIN }}
+          status: ${{ env.STATUS_REVIEW }}
+          status_field: ${{ env.PROJECT_STATUS_FIELD }}
+
+      - name: Update Labels
+        if: |
+          steps.final.outputs.issue_number != '' &&
+          steps.check_label.outputs.has_review_label != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issueNumber = Number('${{ steps.final.outputs.issue_number }}');
+            const { owner, repo } = context.repo;
+            const hasWipLabel = '${{ steps.check_label.outputs.has_wip_label }}' === 'true';
+
+            try {
+              // Get current labels for atomic operation
+              const issue = await github.rest.issues.get({ owner, repo, issue_number: issueNumber });
+              const currentNames = issue.data.labels.map(l => l.name);
+              const filtered = currentNames.filter(n => n !== process.env.WIP_LABEL);
+              if (!filtered.includes(process.env.REVIEW_LABEL)) filtered.push(process.env.REVIEW_LABEL);
+
+              await github.rest.issues.setLabels({ owner, repo, issue_number: issueNumber, labels: filtered });
+              console.log(`Labels updated atomically: ${filtered.join(', ')}`);
+            } catch (error) {
+              console.error(`Error updating labels: ${error.message}`);
+              // Don't fail the workflow for label errors
+            }
+
+      - name: Comment on Issue
+        id: comment-on-issue-pr
+        if: |
+          steps.final.outputs.issue_number != '' &&
+          steps.check_label.outputs.has_review_label != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issueNumber = Number('${{ steps.final.outputs.issue_number }}');
+            const prNumber = Number('${{ steps.final.outputs.pr_number }}');
+            const { owner, repo } = context.repo;
+            const runId = ${{ github.run_id }}
+
+            const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
+            const labelsUpdated = `Labels updated: ${process.env.WIP_LABEL} → ${process.env.REVIEW_LABEL}`;
+
+            try {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: `**Copilot finished!**\n\n**Pull Request**: #${prNumber}\n**Review**: ${prUrl}\n\nProject status updated to "Review"\n${labelsUpdated}\n\n[View in Project](${process.env.PROJECT_URL})`
+              });
+
+              console.log(`Comment added to issue #${issueNumber}`);
+            } catch (error) {
+              console.error(`Error adding comment: ${error.message}`);
+              // Don't fail the workflow for comment errors
+            }
+
+      - name: Request review on PR
+        if: |
+          steps.final.outputs.pr_number != '' &&
+          steps.check_label.outputs.has_review_label != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = Number('${{ steps.final.outputs.pr_number }}');
+            const { owner, repo } = context.repo;
+            const reviewers = JSON.parse(process.env.HUMAN_REVIEWERS || '[]');
+            if (reviewers.length > 0) {
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner, repo,
+                  pull_number: prNumber,
+                  reviewers
+                });
+                console.log(`Requested review from ${reviewers.join(', ')} on PR #${prNumber}`);
+              } catch (error) {
+                console.log(`Could not request review: ${error.message}`);
+              }
+            } else {
+              console.log('No human_reviewers configured — skipping review request');
+            }
+
+      - name: Check for stuck WIP issues
+        if: steps.check-workflow.outputs.workflow_completed != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issueNumber = ${{ matrix.issue.number }};
+            const { owner, repo } = context.repo;
+            const timeoutHours = Number(process.env.WIP_TIMEOUT_HOURS) || 24;
+
+            const issue = await github.rest.issues.get({ owner, repo, issue_number: issueNumber });
+            const wipLabel = process.env.WIP_LABEL;
+
+            // Find when WIP label was added
+            const events = await github.rest.issues.listEvents({ owner, repo, issue_number: issueNumber, per_page: 100 });
+            const wipEvent = events.data
+              .filter(e => e.event === 'labeled' && e.label?.name === wipLabel)
+              .pop();
+
+            if (!wipEvent) return;
+
+            const wipSince = new Date(wipEvent.created_at);
+            const hoursInWip = (Date.now() - wipSince.getTime()) / (1000 * 60 * 60);
+
+            if (hoursInWip > timeoutHours) {
+              // Check if we already commented about being stuck (avoid spam)
+              const comments = await github.rest.issues.listComments({ owner, repo, issue_number: issueNumber, per_page: 20 });
+              const alreadyAlerted = comments.data.some(c => c.body?.includes('**Stuck Detection**'));
+              if (alreadyAlerted) {
+                console.log(`Issue #${issueNumber} already has stuck alert`);
+                return;
+              }
+
+              // Add stuck label
+              try {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: issueNumber, labels: ['stuck'] });
+              } catch (e) {
+                console.log(`Could not add stuck label: ${e.message}`);
+              }
+
+              // Comment
+              const stuckBody = `This issue has had the \`${wipLabel}\` label for **${Math.round(hoursInWip)}h** (timeout: ${timeoutHours}h).\n\nPossible causes:\n- Copilot has not created a PR yet\n- Copilot workflow failed\n- PR was created but workflow did not complete successfully`;
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issueNumber,
+                body: `**Stuck Detection**\n\n${stuckBody}\n\n[View in Project](${process.env.PROJECT_URL})`
+              });
+              console.log(`Issue #${issueNumber} marked as stuck (${Math.round(hoursInWip)}h in WIP)`);
+            } else {
+              console.log(`Issue #${issueNumber} in WIP for ${Math.round(hoursInWip)}h (timeout: ${timeoutHours}h)`);
+            }
+
+      - name: Summary
+        id: summary
+        if: always()
+        run: |
+          if [ "${{ steps.check-workflow.outputs.workflow_completed }}" == "true" ]; then
+            echo "### Copilot Workflow Completed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Issue**: #${{ steps.final.outputs.issue_number }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **PR**: #${{ steps.final.outputs.pr_number }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Status**: Updated to Review" >> $GITHUB_STEP_SUMMARY
+            echo "- **Labels**: ${{ env.WIP_LABEL }} → ${{ env.REVIEW_LABEL }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Project**: ${{ env.PROJECT_URL }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Copilot Workflow In Progress" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Issue**: #${{ matrix.issue.number }}" >> $GITHUB_STEP_SUMMARY
+
+            if [ -n "${{ steps.check-workflow.outputs.pr_number }}" ]; then
+              echo "- **PR**: #${{ steps.check-workflow.outputs.pr_number }}" >> $GITHUB_STEP_SUMMARY
+              echo "- **Status**: Copilot workflow still running or did not complete successfully" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **Status**: Waiting for Copilot to create Pull Request" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            echo "- **Action**: Issue remains with label ${{ env.WIP_LABEL }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Next Check**: This workflow will run again in 15 minutes" >> $GITHUB_STEP_SUMMARY
+          fi

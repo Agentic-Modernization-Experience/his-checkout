@@ -1,0 +1,45 @@
+{
+  "labels": {
+    "phase": [
+      { "name": "requirements", "color": "0075ca", "description": "Requirements gathering and analysis" },
+      { "name": "implementation", "color": "1d76db", "description": "Feature implementation" },
+      { "name": "testing", "color": "c2e0c6", "description": "Testing and validation" }
+    ],
+    "framework": [
+      { "name": "AI-AGENT_WIP", "color": "5319e7", "description": "Issue being handled by agent" },
+      { "name": "AI-AGENT_REVIEW", "color": "0e8a16", "description": "Agent-completed issue, pending review" },
+      { "name": "initialization", "color": "0E8A16", "description": "Issue for initialization process" },
+      { "name": "self-learning", "color": "297dd1", "description": "Improvements to knowledge base" }
+    ]
+  },
+  "templates": [
+    {
+      "id": "requirements",
+      "title": "[Phase 0] Requirements — Feature Analysis",
+      "file": "00-requirements.md",
+      "label": "requirements",
+      "description": "Gather and document feature requirements",
+      "phase": 0
+    },
+    {
+      "id": "implementation",
+      "title": "[Phase 1] Implementation — Feature Development",
+      "file": "01-implementation.md",
+      "label": "implementation",
+      "description": "Implement the feature",
+      "phase": 1,
+      "parallelizable": false,
+      "dependencies": ["requirements"]
+    },
+    {
+      "id": "testing",
+      "title": "[Phase 2] Testing — Feature Validation",
+      "file": "02-testing.md",
+      "label": "testing",
+      "description": "Test and validate the feature",
+      "phase": 2,
+      "parallelizable": false,
+      "dependencies": ["implementation"]
+    }
+  ]
+}
