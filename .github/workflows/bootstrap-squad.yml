@@ -154,24 +154,20 @@ jobs:
           echo "Squad config generated:"
           cat .github/squad-config.json
 
-      - name: Commit squad-config.json
+      - name: Scaffold copilot-instructions.md
+        if: steps.check_files.outputs.instructions_exists != 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Scaffold copilot-instructions.md from template if it doesn't exist
-          if [[ "${{ steps.check_files.outputs.instructions_exists }}" != "true" ]] && [[ -f ".github/templates/copilot-instructions.template.md" ]]; then
+          if [[ -f ".github/templates/copilot-instructions.template.md" ]]; then
             cp .github/templates/copilot-instructions.template.md .github/copilot-instructions.md
-            git add .github/copilot-instructions.md
             echo "copilot-instructions.md scaffolded from template"
           fi
 
-          if [[ "${{ steps.check_files.outputs.config_exists }}" != "true" ]]; then
-            git add .github/squad-config.json
-          fi
-
-          git diff --cached --quiet && echo "No changes to commit" || \
-            (git commit -m "chore: bootstrap squad-config.json [skip ci]" && git push)
+      - name: Commit bootstrap files
+        if: steps.check_files.outputs.config_exists != 'true' || steps.check_files.outputs.instructions_exists != 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: bootstrap squad-config.json and copilot-instructions.md [skip ci]"
+          file_pattern: .github/squad-config.json .github/copilot-instructions.md
 
       - name: Validate config
         id: config
