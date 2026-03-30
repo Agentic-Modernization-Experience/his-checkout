@@ -1,0 +1,131 @@
+{
+  "labels": {
+    "phase": [
+      { "name": "checkout-discovery", "color": "0075ca", "description": "Discovery and requirements for checkout scope" },
+      { "name": "checkout-ux", "color": "e99695", "description": "Checkout UX and flow design" },
+      { "name": "checkout-security", "color": "d93f0b", "description": "Security and compliance for payment checkout" },
+      { "name": "checkout-gateway", "color": "0e8a16", "description": "Gateway integration and API contracts" },
+      { "name": "checkout-backend", "color": "1d76db", "description": "Backend payment orchestration" },
+      { "name": "checkout-frontend", "color": "c5def5", "description": "Frontend checkout implementation" },
+      { "name": "checkout-testing", "color": "fbca04", "description": "Testing and payment simulation" },
+      { "name": "checkout-observability", "color": "006b75", "description": "Observability and release readiness" }
+    ],
+    "framework": [
+      { "name": "AI-AGENT_WIP", "color": "5319e7", "description": "Issue being handled by agent" },
+      { "name": "AI-AGENT_REVIEW", "color": "0e8a16", "description": "Agent-completed issue, pending review" },
+      { "name": "initialization", "color": "0E8A16", "description": "Issue for initialization process" },
+      { "name": "self-learning", "color": "297dd1", "description": "Improvements to knowledge base" }
+    ]
+  },
+  "milestones": [
+    {
+      "title": "Checkout Foundation",
+      "description": "Discovery, UX design, security model, and API contracts — phases 0 through 3",
+      "state": "open"
+    },
+    {
+      "title": "Checkout Build",
+      "description": "Backend payment orchestration and frontend checkout implementation — phases 4 and 5",
+      "state": "open"
+    },
+    {
+      "title": "Checkout Validation & Launch",
+      "description": "Testing, payment simulation, observability, and release readiness — phases 6 and 7",
+      "state": "open"
+    }
+  ],
+  "templates": [
+    {
+      "id": "discovery-and-requirements",
+      "title": "[Phase 0] Discovery & Requirements — Checkout Scope",
+      "file": "00-discovery-and-requirements.md",
+      "label": "checkout-discovery",
+      "milestone": "Checkout Foundation",
+      "description": "Discover checkout requirements, constraints, and success criteria",
+      "phase": 0,
+      "parallelizable": false,
+      "dependencies": []
+    },
+    {
+      "id": "checkout-ux-and-flow-design",
+      "title": "[Phase 1] Checkout UX & Flow Design — Journey Definition",
+      "file": "01-checkout-ux-and-flow-design.md",
+      "label": "checkout-ux",
+      "milestone": "Checkout Foundation",
+      "description": "Design checkout journeys, validation, and recovery UX",
+      "phase": 1,
+      "parallelizable": true,
+      "canRunWith": ["security-and-compliance"],
+      "dependencies": ["discovery-and-requirements"]
+    },
+    {
+      "id": "security-and-compliance",
+      "title": "[Phase 2] Security & Compliance — Payment Protection",
+      "file": "02-security-and-compliance.md",
+      "label": "checkout-security",
+      "milestone": "Checkout Foundation",
+      "description": "Define PCI, tokenization, webhook verification, and fraud controls",
+      "phase": 2,
+      "parallelizable": true,
+      "canRunWith": ["checkout-ux-and-flow-design"],
+      "dependencies": ["discovery-and-requirements"]
+    },
+    {
+      "id": "gateway-and-api-contracts",
+      "title": "[Phase 3] Gateway & API Contracts — Integration Boundaries",
+      "file": "03-gateway-and-api-contracts.md",
+      "label": "checkout-gateway",
+      "milestone": "Checkout Foundation",
+      "description": "Define payment APIs, provider abstraction, and retry semantics",
+      "phase": 3,
+      "parallelizable": false,
+      "dependencies": ["discovery-and-requirements", "security-and-compliance"]
+    },
+    {
+      "id": "backend-payment-orchestration",
+      "title": "[Phase 4] Backend Payment Orchestration — State Management",
+      "file": "04-backend-payment-orchestration.md",
+      "label": "checkout-backend",
+      "milestone": "Checkout Build",
+      "description": "Implement payment orchestration, reconciliation, and compensation hooks",
+      "phase": 4,
+      "parallelizable": true,
+      "canRunWith": ["frontend-checkout-implementation"],
+      "dependencies": ["gateway-and-api-contracts", "security-and-compliance"]
+    },
+    {
+      "id": "frontend-checkout-implementation",
+      "title": "[Phase 5] Frontend Checkout Implementation — Customer Experience",
+      "file": "05-frontend-checkout-implementation.md",
+      "label": "checkout-frontend",
+      "milestone": "Checkout Build",
+      "description": "Implement checkout UI, tokenization boundary, and resilient submission",
+      "phase": 5,
+      "parallelizable": true,
+      "canRunWith": ["backend-payment-orchestration"],
+      "dependencies": ["checkout-ux-and-flow-design", "gateway-and-api-contracts", "security-and-compliance"]
+    },
+    {
+      "id": "testing-and-payment-simulation",
+      "title": "[Phase 6] Testing & Payment Simulation — Validation Matrix",
+      "file": "06-testing-and-payment-simulation.md",
+      "label": "checkout-testing",
+      "milestone": "Checkout Validation & Launch",
+      "description": "Validate payment flows with unit, integration, and E2E simulations",
+      "phase": 6,
+      "parallelizable": false,
+      "dependencies": ["backend-payment-orchestration", "frontend-checkout-implementation", "gateway-and-api-contracts"]
+    },
+    {
+      "id": "observability-and-release-readiness",
+      "title": "[Phase 7] Observability & Release Readiness — Launch Governance",
+      "file": "07-observability-and-release-readiness.md",
+      "label": "checkout-observability",
+      "milestone": "Checkout Validation & Launch",
+      "description": "Define checkout KPIs, alerts, runbooks, and launch criteria",
+      "phase": 7,
+      "parallelizable": false,
+      "dependencies": ["backend-payment-orchestration", "frontend-checkout-implementation", "testing-and-payment-simulation"]
+    }
+  ]
+}

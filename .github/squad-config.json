@@ -1,53 +1,37 @@
 {
-  "org_login": "Agentic-Modernization-Experience",
-  "project_number": 8,
-  "project_url": "https://github.com/orgs/Agentic-Modernization-Experience/projects/8",
+  "org_login": "leandro-canabarro",
+  "project_number": 9,
+  "project_url": "https://github.com/users/leandro-canabarro/projects/9",
   "knowledge_base": {
-    "type": "copilot-space",
-    "name": "KB-Modernization",
-    "url": "https://github.com/copilot/spaces/Agentic-Modernization-Experience/1",
+    "type": "local",
+    "name": "KB-Checkout",
+    "url": "",
     "local_path": ".github/knowledge-base"
   },
   "labels": {
     "wip": "AI-AGENT_WIP",
     "review": "AI-AGENT_REVIEW",
-    "trigger": "modernization"
+    "trigger": "checkout"
   },
   "copilot_bot_login": "copilot-swe-agent",
   "copilot_pr_author": "Copilot",
   "project_status_field": "Status",
   "project_status_values": {
-    "todo": "Todo",
-    "wip": "In Progress",
-    "review": "Review",
+    "backlog": "Backlog",
+    "ready": "Ready",
+    "in progress": "In progress",
+    "in review": "In review",
     "done": "Done"
   },
-  "human_reviewers": [],
+  "human_reviewers": ["guilherme-coletaro", "leandro-canabarro"],
   "wip_timeout_hours": 24,
-  "template_profile": "modernization",
+  "template_profile": "checkout",
   "template_vars": {
-    "TARGET_DB": "PostgreSQL"
-  },
-  "workspaces": {
-    "source": {
-      "label": "Legacy COBOL/CICS",
-      "paths": {
-        "programs": "cbl/",
-        "copybooks": "cpy/",
-        "maps": "bms/",
-        "jobs": "jcl/",
-        "data": "data/"
-      }
-    },
-    "target": {
-      "label": "Java 21",
-      "paths": {
-        "backend": "src/main/java/",
-        "tests": "src/test/java/",
-        "config": "src/main/resources/",
-        "migrations": "src/main/resources/db/migration/",
-        "docs": "docs/"
-      }
-    }
+    "CHECKOUT_MODE": "hosted",
+    "SUPPORTED_PAYMENT_METHODS": "credit_card, pix, boleto",
+    "DEFAULT_CURRENCY": "BRL",
+    "PAYMENT_PROVIDER": "Stripe",
+    "PCI_SCOPE": "SAQ-A",
+    "FRAUD_PROVIDER": "none"
   }
 }

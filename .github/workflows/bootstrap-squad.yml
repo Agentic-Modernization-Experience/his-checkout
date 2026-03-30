@@ -92,6 +92,12 @@ jobs:
 
       - name: Generate squad-config.json
         run: |
+          if [[ -f ".github/squad-config.json" ]]; then
+            echo "::warning::squad-config.json already exists — skipping generation to preserve existing configuration"
+            echo "config_skipped=true" >> $GITHUB_ENV
+            cat .github/squad-config.json
+            exit 0
+          fi
           cat > .github/squad-config.json << 'ENDOFCONFIG'
           {
             "org_login": "${{ inputs.org_login }}",
@@ -148,7 +154,12 @@ jobs:
             echo "copilot-instructions.md scaffolded from template"
           fi
 
-          git add .github/squad-config.json
+          if [[ "$config_skipped" == "true" ]]; then
+            echo "squad-config.json was preserved — skipping commit for config"
+          else
+            git add .github/squad-config.json
+          fi
+
           git diff --cached --quiet && echo "No changes to commit" || \
             (git commit -m "chore: bootstrap squad-config.json [skip ci]" && git push)
 

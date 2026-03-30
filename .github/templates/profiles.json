@@ -1,24 +1,9 @@
 {
   "profiles": [
     {
-      "id": "default",
-      "name": "Generic Workflow",
-      "description": "4-phase generic workflow: Discovery, Planning, Implementation, Verification. Suitable for any project type."
-    },
-    {
-      "id": "modernization",
-      "name": "Legacy Modernization",
-      "description": "8-phase modernization workflow: Documentation, Foundation, Test Planning, Database, API, Backend, Frontend, Integration Testing"
-    },
-    {
-      "id": "feature",
-      "name": "Feature Development",
-      "description": "3-phase feature workflow: Requirements, Implementation, Testing"
-    },
-    {
-      "id": "bugfix",
-      "name": "Bug Fix",
-      "description": "2-phase bugfix workflow: Triage, Fix & Verify"
+      "id": "checkout",
+      "name": "Payment Checkout",
+      "description": "8-phase payment checkout workflow: Discovery, UX Design, Security & Compliance, Gateway & API Contracts, Backend Orchestration, Frontend Implementation, Testing & Simulation, Observability & Release"
     }
   ]
 }
