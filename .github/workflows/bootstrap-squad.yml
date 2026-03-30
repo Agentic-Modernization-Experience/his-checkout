@@ -281,8 +281,30 @@ jobs:
           echo "label=$FIRST_LABEL" >> $GITHUB_OUTPUT
           echo "milestone=$FIRST_MILESTONE" >> $GITHUB_OUTPUT
 
-      - name: Create first phase issue
+      - name: Check existing first phase issue
         if: steps.resolve.outputs.create_first_issue == 'true'
+        id: check_existing_issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LABEL="${{ steps.first_phase.outputs.label }}"
+          ISSUE_NUMBER=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --state all \
+            --label "$LABEL" \
+            --limit 1 \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -n "$ISSUE_NUMBER" ]; then
+            echo "Issue with label '$LABEL' already exists (#$ISSUE_NUMBER), skipping creation"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create first phase issue
+        if: steps.resolve.outputs.create_first_issue == 'true' && steps.check_existing_issue.outputs.exists != 'true'
         uses: ./.github/actions/create-phase-issue
         with:
           owner: ${{ github.repository_owner }}
