@@ -4,78 +4,69 @@ on:
   workflow_dispatch:
     inputs:
       org_login:
-        description: 'GitHub Organization login'
-        required: true
+        description: 'GitHub Organization login (override squad-config.json)'
+        required: false
+        default: ''
       project_number:
-        description: 'GitHub Project V2 number'
-        required: true
+        description: 'GitHub Project V2 number (override squad-config.json)'
+        required: false
+        default: ''
       project_url:
-        description: 'GitHub Project URL (e.g. https://github.com/orgs/ORG/projects/N)'
-        required: true
+        description: 'GitHub Project URL (override squad-config.json)'
+        required: false
+        default: ''
       kb_type:
-        description: 'Knowledge base type'
+        description: 'Knowledge base type (override squad-config.json)'
         required: false
-        default: 'local'
-        type: choice
-        options:
-          - local
-          - copilot-space
+        default: ''
       kb_name:
-        description: 'Knowledge base name'
+        description: 'Knowledge base name (override squad-config.json)'
         required: false
-        default: 'Local Knowledge Base'
+        default: ''
       kb_url:
-        description: 'Knowledge base URL or local path'
+        description: 'Knowledge base URL or local path (override squad-config.json)'
         required: false
-        default: '.github/knowledge-base'
+        default: ''
       sync_labels:
-        description: 'Sync labels from templates-mapping.json?'
+        description: 'Sync labels? true/false (override squad-config.json)'
         required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
+        default: ''
       copilot_pr_author:
-        description: 'Login shown on Copilot PRs (default: Copilot)'
+        description: 'Login shown on Copilot PRs (override squad-config.json)'
         required: false
-        default: 'Copilot'
+        default: ''
       project_status_field:
-        description: 'Status field name in Project V2 (default: Status)'
+        description: 'Status field name in Project V2 (override squad-config.json)'
         required: false
-        default: 'Status'
+        default: ''
       template_profile:
-        description: 'Template profile to use (default, or custom profile name)'
+        description: 'Template profile name (override squad-config.json)'
         required: false
-        default: 'default'
+        default: ''
       trigger_label:
-        description: 'Trigger label for the workflow (label that activates agent automation on issues)'
+        description: 'Trigger label (override squad-config.json)'
         required: false
-        default: 'squad'
+        default: ''
       create_first_issue:
-        description: 'Create the first phase issue automatically?'
+        description: 'Create first phase issue? true/false (override squad-config.json)'
         required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
+        default: ''
       status_todo:
-        description: 'Project status value for new items (default: Todo)'
+        description: 'Project status: backlog (override squad-config.json)'
         required: false
-        default: 'Todo'
+        default: ''
       status_wip:
-        description: 'Project status value for work in progress (default: In Progress)'
+        description: 'Project status: in progress (override squad-config.json)'
         required: false
-        default: 'In Progress'
+        default: ''
       status_review:
-        description: 'Project status value for review (default: Review)'
+        description: 'Project status: in review (override squad-config.json)'
         required: false
-        default: 'Review'
+        default: ''
       status_done:
-        description: 'Project status value for completed items (default: Done)'
+        description: 'Project status: done (override squad-config.json)'
         required: false
-        default: 'Done'
+        default: ''
 
 permissions:
   issues: write
@@ -93,11 +84,23 @@ jobs:
       - name: Generate squad-config.json
         run: |
           if [[ -f ".github/squad-config.json" ]]; then
-            echo "::warning::squad-config.json already exists — skipping generation to preserve existing configuration"
+            echo "::notice::squad-config.json already exists — using existing configuration"
             echo "config_skipped=true" >> $GITHUB_ENV
             cat .github/squad-config.json
             exit 0
           fi
+
+          # Config doesn't exist — inputs are required
+          MISSING=()
+          [[ -z "${{ inputs.org_login }}" ]] && MISSING+=("org_login")
+          [[ -z "${{ inputs.project_number }}" ]] && MISSING+=("project_number")
+          [[ -z "${{ inputs.project_url }}" ]] && MISSING+=("project_url")
+          if [[ ${#MISSING[@]} -gt 0 ]]; then
+            echo "::error::squad-config.json not found and required inputs are missing: ${MISSING[*]}"
+            echo "::error::Either commit a squad-config.json or provide all required inputs."
+            exit 1
+          fi
+
           cat > .github/squad-config.json << 'ENDOFCONFIG'
           {
             "org_login": "${{ inputs.org_login }}",
@@ -167,25 +170,105 @@ jobs:
         id: config
         uses: ./.github/actions/load-squad-config
 
+      - name: Resolve effective values
+        id: resolve
+        run: |
+          # Rule: input if non-empty, else config output from load-squad-config, else hardcoded default
+          resolve() {
+            local input_val="$1" config_val="$2" default_val="$3"
+            if [[ -n "$input_val" ]]; then echo "$input_val"
+            elif [[ -n "$config_val" ]]; then echo "$config_val"
+            else echo "$default_val"
+            fi
+          }
+
+          ORG_LOGIN=$(resolve "${{ inputs.org_login }}" "${{ steps.config.outputs.org_login }}" "")
+          PROJECT_NUMBER=$(resolve "${{ inputs.project_number }}" "${{ steps.config.outputs.project_number }}" "")
+          PROJECT_URL=$(resolve "${{ inputs.project_url }}" "${{ steps.config.outputs.project_url }}" "")
+          KB_TYPE=$(resolve "${{ inputs.kb_type }}" "${{ steps.config.outputs.kb_type }}" "local")
+          KB_NAME=$(resolve "${{ inputs.kb_name }}" "${{ steps.config.outputs.kb_name }}" "")
+          KB_URL=$(resolve "${{ inputs.kb_url }}" "${{ steps.config.outputs.kb_url }}" ".github/knowledge-base")
+          SYNC_LABELS=$(resolve "${{ inputs.sync_labels }}" "${{ steps.config.outputs.sync_labels }}" "true")
+          COPILOT_PR_AUTHOR=$(resolve "${{ inputs.copilot_pr_author }}" "${{ steps.config.outputs.copilot_pr_author }}" "Copilot")
+          PROJECT_STATUS_FIELD=$(resolve "${{ inputs.project_status_field }}" "${{ steps.config.outputs.project_status_field }}" "Status")
+          TEMPLATE_PROFILE=$(resolve "${{ inputs.template_profile }}" "${{ steps.config.outputs.template_profile }}" "default")
+          TRIGGER_LABEL=$(resolve "${{ inputs.trigger_label }}" "${{ steps.config.outputs.trigger_label }}" "squad")
+          CREATE_FIRST_ISSUE=$(resolve "${{ inputs.create_first_issue }}" "${{ steps.config.outputs.create_first_issue }}" "true")
+          STATUS_TODO=$(resolve "${{ inputs.status_todo }}" "${{ steps.config.outputs.status_todo }}" "Todo")
+          STATUS_WIP=$(resolve "${{ inputs.status_wip }}" "${{ steps.config.outputs.status_wip }}" "In Progress")
+          STATUS_REVIEW=$(resolve "${{ inputs.status_review }}" "${{ steps.config.outputs.status_review }}" "Review")
+          STATUS_DONE=$(resolve "${{ inputs.status_done }}" "${{ steps.config.outputs.status_done }}" "Done")
+
+          # Config-only values (no corresponding input)
+          WIP_LABEL="${{ steps.config.outputs.wip_label }}"
+          REVIEW_LABEL="${{ steps.config.outputs.review_label }}"
+          COPILOT_BOT_LOGIN="${{ steps.config.outputs.copilot_bot_login }}"
+          HUMAN_REVIEWERS='${{ steps.config.outputs.human_reviewers }}'
+          WIP_TIMEOUT_HOURS="${{ steps.config.outputs.wip_timeout_hours }}"
+          TEMPLATE_VARS='${{ steps.config.outputs.template_vars }}'
+          WORKSPACES='${{ steps.config.outputs.workspaces }}'
+
+          # Emit all outputs
+          {
+            echo "org_login=$ORG_LOGIN"
+            echo "project_number=$PROJECT_NUMBER"
+            echo "project_url=$PROJECT_URL"
+            echo "kb_type=$KB_TYPE"
+            echo "kb_name=$KB_NAME"
+            echo "kb_url=$KB_URL"
+            echo "sync_labels=$SYNC_LABELS"
+            echo "copilot_pr_author=$COPILOT_PR_AUTHOR"
+            echo "project_status_field=$PROJECT_STATUS_FIELD"
+            echo "template_profile=$TEMPLATE_PROFILE"
+            echo "trigger_label=$TRIGGER_LABEL"
+            echo "create_first_issue=$CREATE_FIRST_ISSUE"
+            echo "status_todo=$STATUS_TODO"
+            echo "status_wip=$STATUS_WIP"
+            echo "status_review=$STATUS_REVIEW"
+            echo "status_done=$STATUS_DONE"
+            echo "wip_label=$WIP_LABEL"
+            echo "review_label=$REVIEW_LABEL"
+            echo "copilot_bot_login=$COPILOT_BOT_LOGIN"
+            echo "human_reviewers=$HUMAN_REVIEWERS"
+            echo "wip_timeout_hours=$WIP_TIMEOUT_HOURS"
+            echo "template_vars=$TEMPLATE_VARS"
+            echo "workspaces=$WORKSPACES"
+          } >> $GITHUB_OUTPUT
+
+          echo "### Resolved values" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| org_login | $ORG_LOGIN |" >> $GITHUB_STEP_SUMMARY
+          echo "| project_number | $PROJECT_NUMBER |" >> $GITHUB_STEP_SUMMARY
+          echo "| template_profile | $TEMPLATE_PROFILE |" >> $GITHUB_STEP_SUMMARY
+          echo "| trigger_label | $TRIGGER_LABEL |" >> $GITHUB_STEP_SUMMARY
+          echo "| sync_labels | $SYNC_LABELS |" >> $GITHUB_STEP_SUMMARY
+          echo "| create_first_issue | $CREATE_FIRST_ISSUE |" >> $GITHUB_STEP_SUMMARY
+          echo "| copilot_pr_author | $COPILOT_PR_AUTHOR |" >> $GITHUB_STEP_SUMMARY
+          echo "| status_todo | $STATUS_TODO |" >> $GITHUB_STEP_SUMMARY
+          echo "| status_wip | $STATUS_WIP |" >> $GITHUB_STEP_SUMMARY
+          echo "| status_review | $STATUS_REVIEW |" >> $GITHUB_STEP_SUMMARY
+          echo "| status_done | $STATUS_DONE |" >> $GITHUB_STEP_SUMMARY
+
       - name: Sync labels
-        if: inputs.sync_labels == 'true'
+        if: steps.resolve.outputs.sync_labels == 'true'
         uses: ./.github/actions/sync-labels
         with:
-          labels-file: .github/templates/${{ inputs.template_profile }}/templates-mapping.json
+          labels-file: .github/templates/${{ steps.resolve.outputs.template_profile }}/templates-mapping.json
           repository: ${{ github.repository }}
 
       - name: Sync milestones
         id: sync-milestones
         uses: ./.github/actions/sync-milestones
         with:
-          milestones-file: .github/templates/${{ inputs.template_profile }}/templates-mapping.json
+          milestones-file: .github/templates/${{ steps.resolve.outputs.template_profile }}/templates-mapping.json
           repository: ${{ github.repository }}
 
       - name: Resolve first phase from templates-mapping.json
-        if: inputs.create_first_issue == 'true'
+        if: steps.resolve.outputs.create_first_issue == 'true'
         id: first_phase
         run: |
-          MAPPING_FILE=".github/templates/${{ inputs.template_profile }}/templates-mapping.json"
+          MAPPING_FILE=".github/templates/${{ steps.resolve.outputs.template_profile }}/templates-mapping.json"
           FIRST_TITLE=$(jq -r '.templates[0].title' "$MAPPING_FILE")
           FIRST_FILE=$(jq -r '.templates[0].file' "$MAPPING_FILE")
           FIRST_LABEL=$(jq -r '.templates[0].label' "$MAPPING_FILE")
@@ -196,19 +279,19 @@ jobs:
           echo "milestone=$FIRST_MILESTONE" >> $GITHUB_OUTPUT
 
       - name: Create first phase issue
-        if: inputs.create_first_issue == 'true'
+        if: steps.resolve.outputs.create_first_issue == 'true'
         uses: ./.github/actions/create-phase-issue
         with:
           owner: ${{ github.repository_owner }}
           repo: ${{ github.event.repository.name }}
           title: ${{ steps.first_phase.outputs.title }}
-          body_path: .github/templates/${{ inputs.template_profile }}/${{ steps.first_phase.outputs.file }}
-          labels: '${{ steps.config.outputs.trigger_label }},${{ steps.first_phase.outputs.label }},${{ steps.config.outputs.wip_label }}'
+          body_path: .github/templates/${{ steps.resolve.outputs.template_profile }}/${{ steps.first_phase.outputs.file }}
+          labels: '${{ steps.resolve.outputs.trigger_label }},${{ steps.first_phase.outputs.label }},${{ steps.resolve.outputs.wip_label }}'
           assign_copilot: 'true'
-          copilot_login: ${{ steps.config.outputs.copilot_bot_login }}
-          org_login: ${{ steps.config.outputs.org_login }}
-          project_number: ${{ steps.config.outputs.project_number }}
-          project_url: ${{ steps.config.outputs.project_url }}
+          copilot_login: ${{ steps.resolve.outputs.copilot_bot_login }}
+          org_login: ${{ steps.resolve.outputs.org_login }}
+          project_number: ${{ steps.resolve.outputs.project_number }}
+          project_url: ${{ steps.resolve.outputs.project_url }}
           milestone_number: ${{ fromJSON(steps.sync-milestones.outputs.milestone_map)[steps.first_phase.outputs.milestone] }}
 
       - name: Summary
@@ -216,12 +299,13 @@ jobs:
           echo "## Agent Squad Bootstrapped" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Configuration" >> $GITHUB_STEP_SUMMARY
-          echo "- **Org**: ${{ inputs.org_login }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Project**: #${{ inputs.project_number }} — ${{ inputs.project_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Labels synced**: ${{ inputs.sync_labels }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Org**: ${{ steps.resolve.outputs.org_login }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project**: #${{ steps.resolve.outputs.project_number }} — ${{ steps.resolve.outputs.project_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Labels synced**: ${{ steps.resolve.outputs.sync_labels }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Milestones synced**: yes" >> $GITHUB_STEP_SUMMARY
-          echo "- **Trigger label**: ${{ inputs.trigger_label }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **First phase created**: ${{ inputs.create_first_issue }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger label**: ${{ steps.resolve.outputs.trigger_label }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Template profile**: ${{ steps.resolve.outputs.template_profile }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **First phase created**: ${{ steps.resolve.outputs.create_first_issue }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "1. Edit \`.github/copilot-instructions.md\` with your project conventions" >> $GITHUB_STEP_SUMMARY

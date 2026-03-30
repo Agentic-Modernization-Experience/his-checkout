@@ -71,6 +71,12 @@ outputs:
   workspaces:
     description: 'Source/target workspace mapping as JSON string'
     value: ${{ steps.load.outputs.workspaces }}
+  sync_labels:
+    description: 'Whether to sync labels during bootstrap (default: true)'
+    value: ${{ steps.load.outputs.sync_labels }}
+  create_first_issue:
+    description: 'Whether to create the first phase issue during bootstrap (default: true)'
+    value: ${{ steps.load.outputs.create_first_issue }}
 
 runs:
   using: 'composite'
@@ -122,12 +128,26 @@ runs:
       echo "copilot_pr_author=$(jq -r '.copilot_pr_author // ""' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
       echo "project_status_field=$(jq -r '.project_status_field // "Status"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
       echo "human_reviewers=$(jq -c '.human_reviewers // []' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
-      echo "status_todo=$(jq -r '.project_status_values.todo // "Todo"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
-      echo "status_wip=$(jq -r '.project_status_values.wip // "In Progress"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
-      echo "status_review=$(jq -r '.project_status_values.review // "Review"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      STATUS_TODO=$(jq -r '.project_status_values.todo // empty' "$CONFIG_PATH")
+      if [[ -z "$STATUS_TODO" ]]; then
+        STATUS_TODO=$(jq -r '.project_status_values.backlog // "Todo"' "$CONFIG_PATH")
+      fi
+      echo "status_todo=$STATUS_TODO" >> $GITHUB_OUTPUT
+      STATUS_WIP=$(jq -r '.project_status_values.wip // empty' "$CONFIG_PATH")
+      if [[ -z "$STATUS_WIP" ]]; then
+        STATUS_WIP=$(jq -r '.project_status_values["in progress"] // "In Progress"' "$CONFIG_PATH")
+      fi
+      echo "status_wip=$STATUS_WIP" >> $GITHUB_OUTPUT
+      STATUS_REVIEW=$(jq -r '.project_status_values.review // empty' "$CONFIG_PATH")
+      if [[ -z "$STATUS_REVIEW" ]]; then
+        STATUS_REVIEW=$(jq -r '.project_status_values["in review"] // "Review"' "$CONFIG_PATH")
+      fi
+      echo "status_review=$STATUS_REVIEW" >> $GITHUB_OUTPUT
       echo "status_done=$(jq -r '.project_status_values.done // "Done"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
       echo "wip_timeout_hours=$(jq -r '.wip_timeout_hours // 24' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
       echo "template_profile=$(jq -r '.template_profile // "default"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
       echo "template_vars=$(jq -c '.template_vars // {}' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
 
+      echo "sync_labels=$(jq -r '.sync_labels // "true"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "create_first_issue=$(jq -r '.create_first_issue // "true"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
       echo "workspaces=$(jq -c '.workspaces // {}' "$CONFIG_PATH")" >> $GITHUB_OUTPUT

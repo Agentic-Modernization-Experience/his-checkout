@@ -26,6 +26,8 @@
   "human_reviewers": ["guilherme-coletaro", "leandro-canabarro"],
   "wip_timeout_hours": 24,
   "template_profile": "checkout",
+  "sync_labels": true,
+  "create_first_issue": true,
   "template_vars": {
     "CHECKOUT_MODE": "hosted",
     "SUPPORTED_PAYMENT_METHODS": "credit_card, pix, boleto",
