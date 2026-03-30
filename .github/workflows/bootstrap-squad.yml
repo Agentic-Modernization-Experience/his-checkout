@@ -81,16 +81,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate squad-config.json
+      - name: Check existing files
+        id: check_files
         run: |
           if [[ -f ".github/squad-config.json" ]]; then
-            echo "::notice::squad-config.json already exists — using existing configuration"
-            echo "config_skipped=true" >> $GITHUB_ENV
-            cat .github/squad-config.json
-            exit 0
+            echo "config_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "config_exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # Config doesn't exist — inputs are required
+          if [[ -f ".github/copilot-instructions.md" ]]; then
+            echo "instructions_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "instructions_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate squad-config.json
+        if: steps.check_files.outputs.config_exists != 'true'
+        run: |
+          # Config doesn't exist here due to step-level if — inputs are required
           MISSING=()
           [[ -z "${{ inputs.org_login }}" ]] && MISSING+=("org_login")
           [[ -z "${{ inputs.project_number }}" ]] && MISSING+=("project_number")
@@ -151,15 +160,13 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # Scaffold copilot-instructions.md from template if it doesn't exist
-          if [[ ! -f ".github/copilot-instructions.md" ]] && [[ -f ".github/templates/copilot-instructions.template.md" ]]; then
+          if [[ "${{ steps.check_files.outputs.instructions_exists }}" != "true" ]] && [[ -f ".github/templates/copilot-instructions.template.md" ]]; then
             cp .github/templates/copilot-instructions.template.md .github/copilot-instructions.md
             git add .github/copilot-instructions.md
             echo "copilot-instructions.md scaffolded from template"
           fi
 
-          if [[ "$config_skipped" == "true" ]]; then
-            echo "squad-config.json was preserved — skipping commit for config"
-          else
+          if [[ "${{ steps.check_files.outputs.config_exists }}" != "true" ]]; then
             git add .github/squad-config.json
           fi
 
