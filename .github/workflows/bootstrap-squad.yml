@@ -72,7 +72,6 @@ permissions:
   issues: write
   contents: write
   pull-requests: write
-  projects: write
 
 jobs:
   bootstrap:
