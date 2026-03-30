@@ -12,6 +12,7 @@ permissions:
   issues: write
   contents: read
   pull-requests: write
+  projects: write
 
 jobs:
   check-closed-issue:
