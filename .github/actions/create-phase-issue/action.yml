@@ -75,6 +75,10 @@ inputs:
     description: 'Project URL used in summary comments or outputs'
     required: false
     default: ''
+  template_vars:
+    description: 'JSON object of key-value pairs used to replace {{PLACEHOLDER}} tokens in the issue body'
+    required: false
+    default: '{}'
 
 outputs:
   issue_number:
@@ -117,6 +121,7 @@ runs:
       PARENT_COMMENT_ISSUE_NUMBER: ${{ inputs.parent_comment_issue_number }}
       PARENT_COMMENT_BODY_JSON: ${{ toJSON(inputs.parent_comment_body) }}
       PROJECT_URL_JSON: ${{ toJSON(inputs.project_url) }}
+      TEMPLATE_VARS_JSON: ${{ toJSON(inputs.template_vars) }}
     with:
       github-token: ${{ env.GH_TOKEN }}
       result-encoding: string
@@ -163,6 +168,16 @@ runs:
             throw new Error('Issue body is required. Provide "body" or "body_path".');
           }
 
+          // Apply template variable substitution from template_vars input
+          let templateVars = {};
+          try { templateVars = JSON.parse(process.env.TEMPLATE_VARS_JSON || '{}'); } catch (e) {}
+          // Check for {{ISSUE_NUMBER}} before substitution so it is not consumed by template_vars
+          const needsIssueNumber = body.includes('{{ISSUE_NUMBER}}');
+          for (const [key, value] of Object.entries(templateVars)) {
+            const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            body = body.replace(new RegExp(`\\{\\{${safeKey}\\}\\}`, 'g'), value || '');
+          }
+
           const labels = parseLabels(labelsInput);
 
           core.info(`Creating issue in ${owner}/${repo}...`);
@@ -184,6 +199,17 @@ runs:
           core.setOutput('issue_url', issueUrl);
           core.setOutput('issue_node_id', issueNodeId);
           core.setOutput('issue_id', issueNodeId);
+
+          // Resolve {{ISSUE_NUMBER}} placeholder with the actual issue number
+          if (needsIssueNumber) {
+            const updatedBody = body.replace(/\{\{ISSUE_NUMBER\}\}/g, String(issueNumber));
+            try {
+              await github.rest.issues.update({ owner, repo, issue_number: issueNumber, body: updatedBody });
+              core.info('Updated issue body with resolved {{ISSUE_NUMBER}}.');
+            } catch (error) {
+              core.warning(`Failed to update issue body for {{ISSUE_NUMBER}}: ${error.message}`);
+            }
+          }
 
           const copilotMessage = assignCopilotFlag
             ? 'Copilot will be assigned to this issue.'

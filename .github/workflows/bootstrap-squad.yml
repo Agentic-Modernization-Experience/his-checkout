@@ -318,6 +318,7 @@ jobs:
           project_number: ${{ steps.resolve.outputs.project_number }}
           project_url: ${{ steps.resolve.outputs.project_url }}
           milestone_number: ${{ fromJSON(steps.sync-milestones.outputs.milestone_map)[steps.first_phase.outputs.milestone] }}
+          template_vars: ${{ steps.resolve.outputs.template_vars }}
 
       - name: Summary
         run: |
