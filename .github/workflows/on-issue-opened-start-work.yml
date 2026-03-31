@@ -130,6 +130,7 @@ jobs:
 
       - name: Enable workflow if needed
         if: steps.decide.outputs.action == 'enable'
+        continue-on-error: true
         run: |
           set -e
           echo "Enabling workflow..."
