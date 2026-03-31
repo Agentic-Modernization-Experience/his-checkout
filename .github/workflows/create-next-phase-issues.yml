@@ -16,6 +16,8 @@ permissions:
 jobs:
   check-closed-issue:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 5
     outputs:
       should_create_next: ${{ steps.check.outputs.should_create_next }}
@@ -76,7 +78,7 @@ jobs:
           TRIGGER_LABEL: ${{ steps.config.outputs.trigger_label }}
           TEMPLATE_PROFILE: ${{ steps.config.outputs.template_profile }}
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const fs = require('fs');
 
@@ -230,12 +232,8 @@ jobs:
 
   create-next-phase-issues:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: check-closed-issue
-    if: needs.check-closed-issue.outputs.should_create_next == 'true'
-    outputs:
-      created_issues: ${{ steps.create-issues.outputs.created_issues }}
     env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
       PROJECT_URL: ${{ needs.check-closed-issue.outputs.project_url }}
       KB_NAME: ${{ needs.check-closed-issue.outputs.kb_name }}
       KB_TYPE: ${{ needs.check-closed-issue.outputs.kb_type }}
@@ -245,6 +243,11 @@ jobs:
       WORKSPACES: ${{ needs.check-closed-issue.outputs.workspaces }}
       TRIGGER_LABEL: ${{ needs.check-closed-issue.outputs.trigger_label }}
       MILESTONE_MAP: ${{ needs.check-closed-issue.outputs.milestone_map }}
+    timeout-minutes: 15
+    needs: check-closed-issue
+    if: needs.check-closed-issue.outputs.should_create_next == 'true'
+    outputs:
+      created_issues: ${{ steps.create-issues.outputs.created_issues }}
 
     steps:
       - name: Checkout Repository
@@ -257,7 +260,7 @@ jobs:
         id: create-issues
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const fs = require('fs');
 
@@ -525,6 +528,8 @@ jobs:
 
   add-issues-to-project:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 10
     needs: [check-closed-issue, create-next-phase-issues]
     if: needs.create-next-phase-issues.outputs.created_issues != '[]' && needs.create-next-phase-issues.outputs.created_issues != ''

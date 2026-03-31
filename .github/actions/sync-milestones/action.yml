@@ -38,7 +38,7 @@ runs:
       MILESTONES_FILE: ${{ inputs.milestones-file }}
       REPOSITORY: ${{ inputs.repository }}
     with:
-      github-token: ${{ github.token }}
+      github-token: ${{ env.GH_TOKEN }}
       result-encoding: string
       script: |
         const fs = require('fs');

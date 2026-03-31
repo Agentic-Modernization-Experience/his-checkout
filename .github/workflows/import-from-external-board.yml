@@ -6,7 +6,7 @@
 # Prerequisites (one-time setup by admin):
 #   For Jira:      Settings → Secrets → JIRA_EMAIL, JIRA_API_TOKEN
 #   For Kanbanize: Settings → Secrets → KANBANIZE_API_KEY
-#   GITHUB_TOKEN is available by default — no setup needed.
+#   HIS_TOKEN (fine-grained PAT) must be configured in repository secrets.
 
 name: 'Import from External Board'
 
@@ -63,6 +63,8 @@ permissions:
 jobs:
   import-tasks:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -119,7 +121,7 @@ jobs:
           KANBANIZE_API_KEY: ${{ secrets.KANBANIZE_API_KEY }}
           TRIGGER_LABEL: ${{ steps.config.outputs.trigger_label }}
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const source = process.env.SOURCE;
             const triggerLabel = process.env.TRIGGER_LABEL;
@@ -451,7 +453,7 @@ jobs:
           ORG_LOGIN: ${{ steps.config.outputs.org_login }}
           PROJECT_NUMBER: ${{ steps.config.outputs.project_number }}
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const issues = JSON.parse(process.env.CREATED_ISSUES || '[]');
             const orgLogin = process.env.ORG_LOGIN;

@@ -29,7 +29,6 @@ runs:
   - name: Sync Labels
     shell: bash
     env:
-      GH_TOKEN: ${{ github.token }}
       LABELS_FILE: ${{ inputs.labels-file }}
       REPOSITORY: ${{ inputs.repository }}
     run: |

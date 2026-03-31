@@ -76,6 +76,8 @@ permissions:
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -284,8 +286,6 @@ jobs:
       - name: Check existing first phase issue
         if: steps.resolve.outputs.create_first_issue == 'true'
         id: check_existing_issue
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           LABEL="${{ steps.first_phase.outputs.label }}"
           ISSUE_NUMBER=$(gh issue list \

@@ -18,6 +18,8 @@ concurrency:
 jobs:
   load-config:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 3
     outputs:
       org_login: ${{ steps.config.outputs.org_login }}
@@ -45,6 +47,8 @@ jobs:
   check-wip-issues:
     needs: load-config
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 10
     outputs:
       issues_to_process: ${{ steps.find-wip-issues.outputs.issues }}
@@ -90,6 +94,8 @@ jobs:
     needs: check-wip-issues
     if: needs.check-wip-issues.outputs.has_issues == 'false'
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 5
 
     steps:
@@ -111,8 +117,6 @@ jobs:
 
           echo "Workflow disabled successfully"
           echo "To re-enable: gh workflow enable \"$WORKFLOW_FILE\" -R \"${{ github.repository }}\""
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Summary
         run: |
@@ -128,8 +132,8 @@ jobs:
     needs: [load-config, check-wip-issues]
     if: needs.check-wip-issues.outputs.has_issues == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
       PROJECT_NUMBER: ${{ needs.load-config.outputs.project_number }}
       ORG_LOGIN: ${{ needs.load-config.outputs.org_login }}
       PROJECT_URL: ${{ needs.load-config.outputs.project_url }}
@@ -140,6 +144,7 @@ jobs:
       HUMAN_REVIEWERS: ${{ needs.load-config.outputs.human_reviewers }}
       WIP_TIMEOUT_HOURS: ${{ needs.load-config.outputs.wip_timeout_hours }}
       STATUS_REVIEW: ${{ needs.load-config.outputs.status_review }}
+    timeout-minutes: 10
     strategy:
       matrix:
         issue: ${{ fromJson(needs.check-wip-issues.outputs.issues_to_process) }}
@@ -151,7 +156,7 @@ jobs:
         id: check-workflow
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const issueNumber = ${{ matrix.issue.number }};
             const { owner, repo } = context.repo;
@@ -258,7 +263,7 @@ jobs:
         if: steps.final.outputs.issue_number != ''
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const issueNumber = Number('${{ steps.final.outputs.issue_number }}');
             const { owner, repo } = context.repo;
@@ -310,7 +315,7 @@ jobs:
           steps.check_label.outputs.has_review_label != 'true'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const issueNumber = Number('${{ steps.final.outputs.issue_number }}');
             const { owner, repo } = context.repo;
@@ -337,7 +342,7 @@ jobs:
           steps.check_label.outputs.has_review_label != 'true'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const issueNumber = Number('${{ steps.final.outputs.issue_number }}');
             const prNumber = Number('${{ steps.final.outputs.pr_number }}');
@@ -368,7 +373,7 @@ jobs:
           steps.check_label.outputs.has_review_label != 'true'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const prNumber = Number('${{ steps.final.outputs.pr_number }}');
             const { owner, repo } = context.repo;
@@ -392,7 +397,7 @@ jobs:
         if: steps.check-workflow.outputs.workflow_completed != 'true'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const issueNumber = ${{ matrix.issue.number }};
             const { owner, repo } = context.repo;

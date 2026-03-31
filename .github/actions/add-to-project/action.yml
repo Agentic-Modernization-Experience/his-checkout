@@ -35,7 +35,6 @@ runs:
     id: add
     shell: bash
     env:
-      GH_TOKEN: ${{ github.token }}
       ISSUE_ID: ${{ inputs.issue_id }}
       ORG_LOGIN: ${{ inputs.org_login }}
       PROJECT_NUMBER: ${{ inputs.project_number }}

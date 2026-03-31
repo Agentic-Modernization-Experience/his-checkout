@@ -30,7 +30,6 @@ runs:
     id: assign
     shell: bash
     env:
-      GH_TOKEN: ${{ github.token }}
       ISSUE_ID: ${{ inputs.issue_id }}
       REPOSITORY: ${{ inputs.repository }}
       BOT_LOGIN: ${{ inputs.bot_login }}

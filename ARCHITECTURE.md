@@ -503,14 +503,17 @@ Issues importadas são **independentes** — não disparam encadeamento de fases
 
 ---
 
-## 10. Autenticação — GITHUB_TOKEN Automático
+## 10. Autenticação — HIS_TOKEN (PAT Fine-Grained)
 
-Todas as actions do HIS utilizam `${{ github.token }}` internamente — **nenhuma action recebe token como parâmetro**. O `GITHUB_TOKEN` é fornecido automaticamente pelo GitHub Actions em cada workflow run.
+Os workflows do HIS definem `GH_TOKEN` no nível do job (`env: GH_TOKEN: ${{ secrets.HIS_TOKEN }}`). Esse ambiente é herdado por todos os steps, incluindo actions compostas locais e actions compostas aninhadas.
+
+As actions compostas do HIS não recebem mais `token` como input. Steps que usam `gh` CLI consomem `GH_TOKEN` herdado automaticamente. Steps `actions/github-script` usam `github-token: ${{ env.GH_TOKEN }}`.
 
 | Componente | Token | Configuração |
 |---|---|---|
-| Todas as actions | `github.token` | Automático, zero configuração |
-| Workflows (github-script) | `secrets.GITHUB_TOKEN` | Automático, zero configuração |
+| Workflows (nível de job) | `GH_TOKEN` com valor de `secrets.HIS_TOKEN` | Configurar `HIS_TOKEN` uma vez por repositório |
+| Actions compostas do HIS (gh CLI) | `GH_TOKEN` herdado do job | Nenhum repasse via `with` |
+| Actions compostas / workflows (`actions/github-script`) | `github-token: ${{ env.GH_TOKEN }}` | Usa o token já definido no job |
 | Jira import | `secrets.JIRA_EMAIL` + `secrets.JIRA_API_TOKEN` | Uma vez pelo admin |
 | Kanbanize import | `secrets.KANBANIZE_API_KEY` | Uma vez pelo admin |
 

@@ -17,6 +17,8 @@ permissions:
 jobs:
   assign-copilot-and-update-status:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 10
     outputs:
       copilot_assigned: ${{ steps.assign-copilot.outputs.success }}
@@ -60,7 +62,7 @@ jobs:
         env:
           WIP_LABEL: ${{ steps.config.outputs.wip_label }}
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN  }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
@@ -90,6 +92,8 @@ jobs:
     needs: assign-copilot-and-update-status
     if: needs.assign-copilot-and-update-status.outputs.copilot_assigned == 'true'
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 3
     steps:
       - name: Check current workflow state
@@ -107,8 +111,6 @@ jobs:
 
           echo "WORKFLOW_STATE=$STATE" >> $GITHUB_OUTPUT
           echo "Workflow state: $STATE"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
 
       - name: Decide enable action
         id: decide
@@ -133,8 +135,6 @@ jobs:
           echo "Enabling workflow..."
           gh workflow enable ".github/workflows/scheduled-wip-monitor.yml" -R "${{ github.repository }}"
           echo "Workflow enabled successfully"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
 
       - name: Summary
         run: |

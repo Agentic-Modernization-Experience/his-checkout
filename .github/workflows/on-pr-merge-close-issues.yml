@@ -16,6 +16,8 @@ permissions:
 jobs:
   close-linked-issue:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 5
     if: github.event.pull_request.merged == true
     steps:
@@ -52,7 +54,7 @@ jobs:
         env:
           TRIGGER_LABEL: ${{ steps.config.outputs.trigger_label }}
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const prNumber = context.payload.pull_request.number;
@@ -133,7 +135,7 @@ jobs:
           REVIEW_LABEL: ${{ steps.config.outputs.review_label }}
           WIP_LABEL: ${{ steps.config.outputs.wip_label }}
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const issueNumber = Number('${{ steps.find-issue.outputs.issue_number }}');

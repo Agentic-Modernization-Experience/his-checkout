@@ -5,7 +5,7 @@ description: |
   For bulk import, use the "Import from External Board" workflow instead — it connects to the
   external board API automatically, fetches all tasks, and handles idempotency in bulk.
   All configuration (org, project, trigger label) is auto-loaded from squad-config.json.
-  GITHUB_TOKEN is used automatically — no input needed.
+  Requires GH_TOKEN to be set in the caller workflow job environment.
 
 inputs:
   source_type:
@@ -76,7 +76,7 @@ runs:
       MILESTONE_NUMBER: ${{ inputs.milestone_number }}
       TRIGGER_LABEL: ${{ steps.config.outputs.trigger_label }}
     with:
-      github-token: ${{ github.token }}
+      github-token: ${{ env.GH_TOKEN }}
       result-encoding: string
       script: |
         const { owner, repo } = context.repo;

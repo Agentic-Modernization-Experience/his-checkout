@@ -17,6 +17,8 @@ permissions:
 jobs:
   prepare-repository:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 5
     steps:
       - name: Checkout repository

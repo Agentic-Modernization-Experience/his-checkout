@@ -118,7 +118,7 @@ runs:
       PARENT_COMMENT_BODY_JSON: ${{ toJSON(inputs.parent_comment_body) }}
       PROJECT_URL_JSON: ${{ toJSON(inputs.project_url) }}
     with:
-      github-token: ${{ github.token }}
+      github-token: ${{ env.GH_TOKEN }}
       result-encoding: string
       script: |
         const fs = require('fs');

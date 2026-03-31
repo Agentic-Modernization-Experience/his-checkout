@@ -30,6 +30,8 @@ permissions:
 jobs:
   generate-report:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -51,7 +53,7 @@ jobs:
           SOURCE_FILTER: ${{ inputs.source_filter }}
           STATUS_FILTER: ${{ inputs.status_filter }}
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ env.GH_TOKEN }}
           script: |
             const fs = require('fs');
             const { owner, repo } = context.repo;
