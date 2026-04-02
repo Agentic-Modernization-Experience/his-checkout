@@ -246,18 +246,26 @@ If any delegated agent completes with no natural-language output:
 
 ### Durable vs Session Memory
 
-1. `.agent-memory/project_decisions.md` and `.agent-memory/error_patterns.md` are the canonical durable project memory
+1. `.agent-memory/INDEX.md` is the canonical entry point for durable project memory; it is a lightweight pointer index loaded in context. Full knowledge lives in `.agent-memory/topics/` files, loaded on demand. Memory is treated as best known context, not absolute truth — verify critical facts against the codebase before relying on them.
 2. `vscode/memory` is session-level only: use it for current-plan notes, transient routing hints, or user-preference breadcrumbs
 3. never treat `vscode/memory` as durable project truth
-4. if knowledge must survive across sessions or be shared with future agents, persist it in `.agent-memory/`
+4. if knowledge must survive across sessions or be shared with future agents, write a topic file in `.agent-memory/topics/` and add a pointer in `.agent-memory/INDEX.md`
 
 ### Read-First
 
 Before any non-trivial planning, auditing, or implementation:
 
-1. read `.agent-memory/project_decisions.md`
-2. read `.agent-memory/error_patterns.md`
+1. read `.agent-memory/INDEX.md` (always — this is the lightweight pointer index)
+2. load specific topic files from `.agent-memory/topics/` only when relevant to the current task
 3. read `.agent-memory/archive/*` only if needed to resolve contradictions or prior context
+
+### Consolidation Pre-Check
+
+At the start of any non-trivial task, check the INDEX.md header:
+
+1. if `_consolidation_in_progress: true` for more than 1 hour, force-release the lock before proceeding
+2. if `last_consolidated` is older than 7 days or the index has more than 10 entries without a consolidation, trigger a Dream Phase before routing (see Step 7.5)
+3. if neither condition applies, proceed normally
 
 ### Step 8 Triggers
 
@@ -286,7 +294,7 @@ Skip Step 8 only for purely mechanical, single-file trivial work that yields no 
    - a `Memory Candidate`
 4. when Step 8 is required, delegate it explicitly with:
    - `ALLOW_MEMORY_UPDATE=true`
-   - target file(s): `.agent-memory/project_decisions.md` and/or `.agent-memory/error_patterns.md`
+   - target: `.agent-memory/topics/<topic-id>.md` (topic file first, then `INDEX.md`)
    - `@skills/memory-management/SKILL.md`
    - completion gate: `Memory Transaction Successful: <reason>`
 
@@ -376,11 +384,37 @@ Verify the integrated result and report outcomes, risks, and next steps in chat.
 For any task that matches a Step 8 trigger, after verification:
 
 1. ask `Planner` or `Reviewer` to summarize new durable decisions/patterns when helpful
-2. delegate `Coder` to update `.agent-memory/project_decisions.md` and/or `.agent-memory/error_patterns.md` via `@skills/memory-management/SKILL.md`
-3. require the executor to follow the memory sync checklist in `@skills/memory-management/SKILL.md`
+2. delegate `Coder` to write a topic file in `.agent-memory/topics/` and update `INDEX.md` via `@skills/memory-management/SKILL.md`
+3. require the executor to follow the memory sync checklist in `@skills/memory-management/SKILL.md` (topic file first, index second, read-back mandatory)
 4. do not close the task until memory transaction success is reported
-5. if a memory file exceeds 500 lines, archive the oldest 20% to `.agent-memory/archive/`
+5. if INDEX.md approaches 200 lines or any topic file exceeds 300 lines, trigger archival per `@skills/memory-management/SKILL.md`
 6. remove leftover temporary files such as `/.tmp/brainstorm-[hiveID].md`
+
+### Step 7.5: Dream Phase (Periodic Consolidation)
+
+Trigger this phase when the Consolidation Pre-Check (see Read-First) identifies a need, or when explicitly requested.
+
+Orchestration:
+
+1. set `_consolidation_in_progress: true` in INDEX.md header (delegate to `Coder`)
+2. delegate `Explore` for read-only audit:
+   - Orient: list all topic files and read INDEX.md
+   - Audit: check each indexed topic against the codebase for staleness, contradictions, or drift
+   - Report: list topics that are stale (last_verified > 30 days), contradictory, duplicated, or orphaned
+3. delegate `Coder` for consolidation writes:
+   - merge duplicate topics into single files
+   - convert relative dates to absolute ISO dates
+   - mark stale topics with `stale: true` in their memory_meta
+   - update contradicted topics with corrected facts and note the correction in memory_meta; archive only if the topic is low-value and fully superseded
+   - update INDEX.md to reflect all changes
+   - prune INDEX.md to stay under 200 lines
+4. set `_consolidation_in_progress: false` and update `last_consolidated` in INDEX.md header
+5. if the lock was force-released (stuck > 1 hour), note the incident in the consolidation topic
+
+Rules:
+- Dream Phase is read-only for `Explore` and write-enabled for `Coder` only
+- do not run Dream Phase concurrently with Step 7 memory writes
+- do not block user-facing work if consolidation can be deferred to end of session
 
 ## Parallelism, Worktrees, and Multi-Hive
 

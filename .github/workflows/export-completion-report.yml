@@ -146,7 +146,7 @@ jobs:
                 original_url: originalUrl,
                 github_issue: `#${issue.number}`,
                 github_issue_url: issue.html_url,
-                title: issue.title.replace(/,/g, ';'),
+                title: issue.title,
                 status: issue.state === 'closed' ? 'Done' : 'Open',
                 pr: prNumber,
                 pr_url: prUrl,
@@ -163,10 +163,20 @@ jobs:
               return a.source_id.localeCompare(b.source_id);
             });
 
+            // Sanitize a value for safe CSV output (prevent formula injection)
+            function csvSafe(value) {
+              if (!value) return '""';
+              let s = String(value);
+              if (/^[=+\-@\t\r]/.test(s)) {
+                s = "'" + s;
+              }
+              return '"' + s.replace(/"/g, '""') + '"';
+            }
+
             // Generate CSV
             const csvHeader = 'Source Type,Source ID,Original URL,GitHub Issue,GitHub Issue URL,Title,Status,PR,PR URL,Merged Date';
             const csvRows = rows.map(r =>
-              `${r.source_type},${r.source_id},${r.original_url},${r.github_issue},${r.github_issue_url},"${r.title}",${r.status},${r.pr},${r.pr_url},${r.merged_date}`
+              [r.source_type, r.source_id, r.original_url, r.github_issue, r.github_issue_url, r.title, r.status, r.pr, r.pr_url, r.merged_date].map(csvSafe).join(',')
             );
             const csv = [csvHeader, ...csvRows].join('\n');
             fs.writeFileSync('completion-report.csv', csv);

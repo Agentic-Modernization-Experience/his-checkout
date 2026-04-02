@@ -2,10 +2,15 @@
 name: ReviewerGPT
 description: Review sub-agent using GPT-5.4. Uses shared review-core contract and feeds MultiReviewer.
 model: GPT-5.4 (copilot)
-target: vscode
 user-invocable: false
 disable-model-invocation: true
-tools: ["vscode", "execute", "read", "search", "web"]
+tools: [
+   vscode,
+   execute,
+   read,
+   search,
+   web
+]
 agents: []
 ---
 

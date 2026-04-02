@@ -180,6 +180,28 @@ runs:
 
           const labels = parseLabels(labelsInput);
 
+          // Idempotency check: skip creation if an issue with all the same labels already exists
+          if (labels.length > 0) {
+            const labelFilter = labels.join(',');
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              labels: labelFilter,
+              state: 'all',
+              per_page: 1
+            });
+
+            if (existing.length > 0) {
+              const dup = existing[0];
+              core.info(`Issue already exists with matching labels: #${dup.number} (${dup.html_url}) — skipping creation.`);
+              core.setOutput('issue_number', String(dup.number));
+              core.setOutput('issue_url', dup.html_url);
+              core.setOutput('issue_node_id', dup.node_id);
+              core.setOutput('issue_id', dup.node_id);
+              return;
+            }
+          }
+
           core.info(`Creating issue in ${owner}/${repo}...`);
           const response = await github.rest.issues.create({
             owner,
