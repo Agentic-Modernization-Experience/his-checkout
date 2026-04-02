@@ -59,8 +59,8 @@ Worktree note: if Orchestrator provides worktree path, work only there. Never cr
 1. Trace execution path.
 2. Identify minimal root cause.
 3. Validate hypothesis against real code before edits.
-4. Check `.agent-memory/error_patterns.md` for recurrence.
-5. If issue matches known pattern, mark as recurring architectural flaw and escalate.
+4. Read `.agent-memory/INDEX.md` and search for `error-pattern` type entries. Load relevant topic files from `.agent-memory/topics/` to check for recurrence.
+5. If issue matches a known pattern in a topic file, mark as recurring architectural flaw and escalate.
 
 ### Phase 3: Minimal Fix
 
@@ -91,6 +91,13 @@ Include these sections:
 4. Outstanding Issues (or `None`)
 5. Neural Feedback Loop (Recurrence Escalation) when applicable
 6. Neural Pattern Recognition (skill-update proposal) when applicable
+7. Memory Candidate (when not escalated and bug was non-trivial):
+   - Root cause summary
+   - Prevention guardrail
+   - Reproduction signal
+   - Suggested topic-id (kebab-case)
+   - Suggested type: error-pattern
+   - Suggested confidence: high | medium | low
 
 ### Recurrence Escalation Content (when applicable)
 

@@ -13,9 +13,41 @@ This skill defines the rules for interacting with the `.agent-memory/` directory
 ## 1. Directory Structure
 
 - `.agent-memory/`
-  - `project_decisions.md`: High-level architectural and design decisions.
-  - `error_patterns.md`: Recurring bugs and their solutions.
-  - `archive/`: Compressed or outdated entries.
+  - `INDEX.md`: Lightweight pointer index (~150 chars per line, always loaded in agent context). Maps topic IDs to files. Never stores facts -- only locations.
+  - `topics/`: On-demand topic files with full decision/pattern details. Loaded only when needed.
+  - `archive/`: Aged or outdated topic files.
+
+### INDEX.md Schema
+
+The index is a routing map, not a knowledge store. It must stay under 200 lines and ~25KB.
+
+Header block (always present at top of INDEX.md):
+
+    ---
+    schema_version: 2
+    last_consolidated: <ISO date or "never">
+    _consolidation_in_progress: false
+    ---
+
+Entry format (one per line after the header):
+
+    - <topic-id> | <type: decision | error-pattern | onboarding> | <date: YYYY-MM-DD> | <confidence: high | medium | low> | topics/<topic-id>.md
+
+Rules:
+- Write the topic file first, then update the index. Never the reverse.
+- Each line must be ~150 characters or less.
+- The index never contains facts, inferences, or detailed rationale -- only pointers.
+- If the index approaches 200 lines, trigger a consolidation cycle (see Dream Phase).
+
+### Topic File Format
+
+Each topic file in `topics/` follows the entry shapes defined in Section 5, with these additional metadata fields in `memory_meta`:
+
+- `confidence: high | medium | low` -- how verified is this knowledge
+- `last_verified: <ISO date>` -- when an agent last confirmed this against the codebase
+- `stale: true | false` -- set by consolidation when `last_verified` is older than 30 days
+
+Topic files are loaded on-demand. Agents read the index first and load only topics relevant to the current task.
 
 ---
 
@@ -56,7 +88,7 @@ This skill defines the rules for interacting with the `.agent-memory/` directory
 
 ## 5. Entry Shapes
 
-### `project_decisions.md`
+### Decision Topic Format
 
 Prefer this shape for durable decisions:
 
@@ -100,7 +132,7 @@ For onboarding / project familiarization runs, append a compact baseline snapsho
 - Only if necessary, and clearly marked
 ```
 
-### `error_patterns.md`
+### Error-Pattern Topic Format
 
 Prefer this shape for recurring issues:
 
@@ -127,6 +159,15 @@ Prefer this shape for recurring issues:
 - author: <agent>
 ```
 
+### Topic File Naming
+
+Topic files use kebab-case IDs matching their index entry: `topics/<topic-id>.md`
+
+Examples:
+- `topics/milestone-support.md`
+- `topics/jq-boolean-pattern.md`
+- `topics/csv-injection-fix.md`
+
 ---
 
 ## 6. Conflict Resolution (Multi-Hive)
@@ -142,10 +183,10 @@ Prefer this shape for recurring issues:
 
 After any non-trivial feature, bugfix, refactor, onboarding scan, review-driven change, or CI/dependency update:
 
-1. Update the relevant durable memory file(s).
+1. Write or update the relevant topic file in `.agent-memory/topics/`, then update `INDEX.md`. Never update the index without a corresponding topic file.
 2. Run this checklist:
-   - update `project_decisions.md` if there is a new invariant, decision, onboarding snapshot, or behavior change worth keeping
-   - update `error_patterns.md` if the run exposed a repeatable failure mode with a clear fix and prevention guardrail
+   - create or update a topic file in `topics/` for new invariants, decisions, onboarding snapshots, or behavior changes worth keeping
+   - create or update a topic file in `topics/` for repeatable failure modes with clear fix and prevention guardrails
    - keep only durable knowledge; move scratch notes, temporary plans, and verbose reports out of `.agent-memory/`
    - separate `Facts` from `Inferences` when the statement is not fully verified from the repo
    - avoid duplicate entries; merge into an existing entry if it describes the same rule or pattern
@@ -158,11 +199,11 @@ After any non-trivial feature, bugfix, refactor, onboarding scan, review-driven 
 
 ## 8. Smart Garbage Collection (Archiving)
 
-- **Audit Trigger**: Perform a check when a memory file exceeds 500 lines.
+- **Audit Trigger**: Perform a check when INDEX.md approaches 200 lines or any topic file exceeds 300 lines.
 - **Archiving Logic**:
-  - Move the oldest 20% of entries to `.agent-memory/archive/`.
-  - Name archive files as `[filename]-YYYY-MM-DD.md`.
-  - Leave a tombstone entry in the main file mentioning where the old data was moved.
+  - Move the oldest 20% of topic files to `.agent-memory/archive/`.
+  - Name archived files as `archive/<topic-id>-YYYY-MM-DD.md`.
+  - Remove the corresponding line from INDEX.md. Optionally leave a tombstone comment if the topic is referenced by other active topics.
 
 ---
 
@@ -178,10 +219,82 @@ If `.agent-memory/` is stale, contradictory, or mostly wrong:
 
 ---
 
-## 10. Transaction Verification (Critical)
+## 10. Memory Semantics: Best Known Context
+
+Memory entries are treated as the best available context, not absolute truth. Agents must verify critical facts against the actual codebase before relying on them for decisions.
+
+Rules:
+- High-confidence entries verified within 30 days may be trusted without re-verification for routine tasks.
+- Medium or low-confidence entries must be verified before use in architectural decisions or critical fixes.
+- Stale entries (last_verified > 30 days) should be re-verified on first access or flagged for consolidation.
+- If verification reveals a contradiction, update the topic file immediately and note the correction in memory_meta.
+- Never treat memory as a substitute for reading the actual code when precision matters.
+
+---
+
+## 11. Dream Phase (Periodic Consolidation)
+
+The Dream Phase is a proactive maintenance cycle that prevents memory drift, staleness, and contradiction accumulation. It is triggered and orchestrated by the Orchestrator (see Step 7.5 in `orchestrator.agent.md`).
+
+### Trigger Conditions
+
+A Dream Phase should run when any of these are true:
+
+1. INDEX.md has more than 10 entries that have not been reviewed since the last consolidation.
+2. The `last_consolidated` field in INDEX.md is older than 7 days.
+3. The Orchestrator or user explicitly requests consolidation.
+
+### Lock Protocol
+
+1. Before starting, set `_consolidation_in_progress: true` in the INDEX.md header.
+2. After completing (success or handled failure), set `_consolidation_in_progress: false` and update `last_consolidated` to the current ISO date.
+3. If a consolidation lock has been active for more than 1 hour without progress, any agent may force-release it by setting `_consolidation_in_progress: false`.
+4. Do not run Dream Phase concurrently with Step 7 memory writes.
+
+### Phases
+
+#### Orient
+- List all files in `.agent-memory/topics/`.
+- Read `INDEX.md` fully.
+- Identify index entries pointing to missing topic files (orphaned pointers).
+- Identify topic files not referenced in the index (orphaned topics).
+
+#### Audit (Read-Only)
+- For each active topic, check `last_verified` and `confidence` from its `memory_meta`.
+- Cross-reference key facts against the actual codebase where feasible.
+- Flag topics as:
+  - `stale`: `last_verified` older than 30 days
+  - `contradicted`: fact no longer matches codebase
+  - `duplicated`: multiple topics cover the same decision/pattern
+  - `orphaned`: topic file exists but is not in the index, or index entry points to missing file
+
+#### Consolidate (Write)
+- Merge duplicate topics into a single topic file. Preserve the most complete and recent information.
+- Update contradicted topics with corrected facts. Note the correction in `memory_meta`.
+- Mark stale topics with `stale: true` in their `memory_meta`.
+- Convert any relative dates to absolute ISO dates (YYYY-MM-DD).
+- Archive low-value or superseded topics to `.agent-memory/archive/<topic-id>-YYYY-MM-DD.md`.
+- Add orphaned topic files to the index, or archive them if they are outdated.
+- Remove orphaned index pointers.
+
+#### Prune
+- If INDEX.md exceeds 180 lines, archive the oldest 20% of low-access topics.
+- Ensure INDEX.md stays under 200 lines after all operations.
+- Ensure no topic file exceeds 300 lines; split large topics if necessary.
+
+### Output
+After consolidation, the executing agent must report:
+- Number of topics audited, merged, archived, and flagged as stale.
+- Updated `last_consolidated` date.
+- `Dream Phase Complete: <summary>`.
+
+---
+
+## 12. Transaction Verification (Critical)
 
 After every write or modification to `.agent-memory/`:
 
+- **Write Order**: Confirm topic file was written before index was updated. If index references a non-existent topic file, the transaction has failed.
 - **Read-Back**: You MUST read the file back to verify the entry was correctly appended/merged.
 - **Consistency Check**: Ensure the new entry doesn't contradict existing high-priority decisions.
 - **Success Report**: Explicitly state `Memory Transaction Successful: <reason>` in the output.

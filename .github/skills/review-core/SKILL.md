@@ -65,9 +65,13 @@ When the Orchestrator requests it (or when the review discovers durable repo-wid
 - [Durable invariant/decision/rule-of-thumb worth remembering]
 - [Repeatable error pattern + prevention guardrail]
 - [How to run/build/test in this repo (only if stable)]
+- Suggested topic-id: <kebab-case-id>
+- Suggested type: decision | error-pattern
+- Suggested confidence: high | medium | low
 ```
 
 Keep it short (2–8 bullets). No long narrative.
+Memory candidates are hints for the Orchestrator's Step 7 knowledge extraction. They will be written as topic files in `.agent-memory/topics/` and indexed in `INDEX.md` by the Coder agent.
 
 ## Rules
 

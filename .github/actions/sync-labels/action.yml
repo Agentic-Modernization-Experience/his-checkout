@@ -32,6 +32,8 @@ runs:
       LABELS_FILE: ${{ inputs.labels-file }}
       REPOSITORY: ${{ inputs.repository }}
     run: |
+      set -e
+
       echo "## Label Synchronization Report" >> $GITHUB_STEP_SUMMARY
       echo "" >> $GITHUB_STEP_SUMMARY
       echo "**Repository:** \`$REPOSITORY\`" >> $GITHUB_STEP_SUMMARY

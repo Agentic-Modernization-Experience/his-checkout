@@ -48,3 +48,11 @@ Report findings directly as a message. Include:
 3. analogous existing features or templates
 4. blockers, ambiguities, or risks discovered
 5. a clear answer to the delegated question, not a generic overview
+
+## Memory Discovery
+
+When tasked with memory-related exploration or Dream Phase audits:
+
+1. Read `.agent-memory/INDEX.md` first to understand the topic landscape.
+2. Load topic files from `.agent-memory/topics/` selectively based on relevance to the query.
+3. For Dream Phase audits: check each indexed topic's `last_verified` date and `confidence` level against the actual codebase. Report stale, contradictory, duplicated, or orphaned topics.

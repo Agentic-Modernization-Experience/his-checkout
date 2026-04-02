@@ -31,6 +31,10 @@ on:
         description: 'Sync labels? true/false (override squad-config.json)'
         required: false
         default: ''
+      sync_milestones:
+        description: 'Sync milestones? true/false (override squad-config.json)'
+        required: false
+        default: ''
       copilot_pr_author:
         description: 'Login shown on Copilot PRs (override squad-config.json)'
         required: false
@@ -80,6 +84,15 @@ jobs:
       GH_TOKEN: ${{ secrets.HIS_TOKEN }}
     timeout-minutes: 10
     steps:
+      - name: Validate authentication token
+        env:
+          GH_TOKEN: ${{ secrets.HIS_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::HIS_TOKEN secret is not configured. Please add a Personal Access Token with the required scopes to your repository secrets."
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -194,6 +207,7 @@ jobs:
           KB_NAME=$(resolve "${{ inputs.kb_name }}" "${{ steps.config.outputs.kb_name }}" "")
           KB_URL=$(resolve "${{ inputs.kb_url }}" "${{ steps.config.outputs.kb_url }}" ".github/knowledge-base")
           SYNC_LABELS=$(resolve "${{ inputs.sync_labels }}" "${{ steps.config.outputs.sync_labels }}" "true")
+          SYNC_MILESTONES=$(resolve "${{ inputs.sync_milestones }}" "${{ steps.config.outputs.sync_milestones }}" "true")
           COPILOT_PR_AUTHOR=$(resolve "${{ inputs.copilot_pr_author }}" "${{ steps.config.outputs.copilot_pr_author }}" "Copilot")
           PROJECT_STATUS_FIELD=$(resolve "${{ inputs.project_status_field }}" "${{ steps.config.outputs.project_status_field }}" "Status")
           TEMPLATE_PROFILE=$(resolve "${{ inputs.template_profile }}" "${{ steps.config.outputs.template_profile }}" "default")
@@ -222,6 +236,7 @@ jobs:
             echo "kb_name=$KB_NAME"
             echo "kb_url=$KB_URL"
             echo "sync_labels=$SYNC_LABELS"
+            echo "sync_milestones=$SYNC_MILESTONES"
             echo "copilot_pr_author=$COPILOT_PR_AUTHOR"
             echo "project_status_field=$PROJECT_STATUS_FIELD"
             echo "template_profile=$TEMPLATE_PROFILE"
@@ -248,6 +263,7 @@ jobs:
           echo "| template_profile | $TEMPLATE_PROFILE |" >> $GITHUB_STEP_SUMMARY
           echo "| trigger_label | $TRIGGER_LABEL |" >> $GITHUB_STEP_SUMMARY
           echo "| sync_labels | $SYNC_LABELS |" >> $GITHUB_STEP_SUMMARY
+          echo "| sync_milestones | $SYNC_MILESTONES |" >> $GITHUB_STEP_SUMMARY
           echo "| create_first_issue | $CREATE_FIRST_ISSUE |" >> $GITHUB_STEP_SUMMARY
           echo "| copilot_pr_author | $COPILOT_PR_AUTHOR |" >> $GITHUB_STEP_SUMMARY
           echo "| status_todo | $STATUS_TODO |" >> $GITHUB_STEP_SUMMARY
@@ -264,6 +280,7 @@ jobs:
 
       - name: Sync milestones
         id: sync-milestones
+        if: steps.resolve.outputs.sync_milestones == 'true'
         uses: ./.github/actions/sync-milestones
         with:
           milestones-file: .github/templates/${{ steps.resolve.outputs.template_profile }}/templates-mapping.json
@@ -274,6 +291,11 @@ jobs:
         id: first_phase
         run: |
           MAPPING_FILE=".github/templates/${{ steps.resolve.outputs.template_profile }}/templates-mapping.json"
+          TEMPLATE_COUNT=$(jq '.templates | length' "$MAPPING_FILE")
+          if [ "$TEMPLATE_COUNT" -eq 0 ]; then
+            echo "::error::Templates array is empty in templates-mapping.json. At least one template is required."
+            exit 1
+          fi
           FIRST_TITLE=$(jq -r '.templates[0].title' "$MAPPING_FILE")
           FIRST_FILE=$(jq -r '.templates[0].file' "$MAPPING_FILE")
           FIRST_LABEL=$(jq -r '.templates[0].label' "$MAPPING_FILE")
@@ -317,8 +339,7 @@ jobs:
           org_login: ${{ steps.resolve.outputs.org_login }}
           project_number: ${{ steps.resolve.outputs.project_number }}
           project_url: ${{ steps.resolve.outputs.project_url }}
-          milestone_number: ${{ fromJSON(steps.sync-milestones.outputs.milestone_map)[steps.first_phase.outputs.milestone] }}
-          template_vars: ${{ steps.resolve.outputs.template_vars }}
+          milestone_number: ${{ steps.resolve.outputs.sync_milestones == 'true' && fromJSON(steps.sync-milestones.outputs.milestone_map)[steps.first_phase.outputs.milestone] || '' }}
 
       - name: Summary
         run: |
@@ -328,7 +349,7 @@ jobs:
           echo "- **Org**: ${{ steps.resolve.outputs.org_login }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Project**: #${{ steps.resolve.outputs.project_number }} — ${{ steps.resolve.outputs.project_url }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Labels synced**: ${{ steps.resolve.outputs.sync_labels }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Milestones synced**: yes" >> $GITHUB_STEP_SUMMARY
+          echo "- **Milestones synced**: ${{ steps.resolve.outputs.sync_milestones }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Trigger label**: ${{ steps.resolve.outputs.trigger_label }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Template profile**: ${{ steps.resolve.outputs.template_profile }}" >> $GITHUB_STEP_SUMMARY
           echo "- **First phase created**: ${{ steps.resolve.outputs.create_first_issue }}" >> $GITHUB_STEP_SUMMARY

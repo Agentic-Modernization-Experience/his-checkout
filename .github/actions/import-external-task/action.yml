@@ -191,7 +191,3 @@ runs:
       issue_id: ${{ steps.import.outputs.issue_node_id }}
       org_login: ${{ steps.config.outputs.org_login }}
       project_number: ${{ steps.config.outputs.project_number }}
-
-branding:
-  icon: 'download'
-  color: 'orange'
