@@ -41,6 +41,8 @@ runs:
       STATUS_FIELD: ${{ inputs.status_field }}
       STATUS_VALUE: ${{ inputs.status_value }}
     run: |
+      set -e
+
       # Fetch project ID
       PROJECT_QUERY=$(cat <<'GRAPHQL'
       query($org: String!, $number: Int!) {
@@ -57,6 +59,13 @@ runs:
         -f query="$PROJECT_QUERY" \
         -f org="$ORG_LOGIN" \
         -F number="$PROJECT_NUMBER")
+
+      PROJECT_ERRORS=$(echo "$PROJECT_RESULT" | jq -r '.errors // empty')
+      if [ -n "$PROJECT_ERRORS" ] && [ "$PROJECT_ERRORS" != "null" ]; then
+        echo "GraphQL error fetching project: $PROJECT_ERRORS"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
 
       PROJECT_ID=$(echo "$PROJECT_RESULT" | jq -r '.data.organization.projectV2.id')
 
@@ -121,6 +130,13 @@ runs:
           -F number="$PROJECT_NUMBER" \
           -f fieldName="$STATUS_FIELD")
 
+        FIELD_ERRORS=$(echo "$FIELD_RESULT" | jq -r '.errors // empty')
+        if [ -n "$FIELD_ERRORS" ] && [ "$FIELD_ERRORS" != "null" ]; then
+          echo "GraphQL error fetching status field: $FIELD_ERRORS"
+          echo "success=true" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
         FIELD_ID=$(echo "$FIELD_RESULT" | jq -r '.data.organization.projectV2.field.id')
         OPTION_ID=$(echo "$FIELD_RESULT" | jq -r \
           --arg status "$STATUS_VALUE" \
@@ -168,7 +184,3 @@ runs:
       fi
 
       echo "success=true" >> $GITHUB_OUTPUT
-
-branding:
-  icon: 'plus-circle'
-  color: 'blue'

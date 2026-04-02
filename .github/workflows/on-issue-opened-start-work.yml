@@ -12,7 +12,6 @@ permissions:
   issues: write
   contents: read
   pull-requests: read
-  actions: write
 
 jobs:
   assign-copilot-and-update-status:
@@ -87,64 +86,3 @@ jobs:
           echo "- **Status**: ${{ steps.config.outputs.status_wip }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Project**: ${{ steps.config.outputs.project_url }}" >> $GITHUB_STEP_SUMMARY
 
-  enable-finish-monitor:
-    name: Enable Finish Workflow Monitor
-    needs: assign-copilot-and-update-status
-    if: needs.assign-copilot-and-update-status.outputs.copilot_assigned == 'true'
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
-    timeout-minutes: 3
-    steps:
-      - name: Check current workflow state
-        id: check-state
-        continue-on-error: true
-        run: |
-          echo "Checking workflow state..."
-
-          STATE=$(gh api repos/${{ github.repository }}/actions/workflows | \
-            jq -r '.workflows[] | select(.path == ".github/workflows/scheduled-wip-monitor.yml") | .state')
-
-          if [ -z "$STATE" ]; then
-            STATE="not_found"
-          fi
-
-          echo "WORKFLOW_STATE=$STATE" >> $GITHUB_OUTPUT
-          echo "Workflow state: $STATE"
-
-      - name: Decide enable action
-        id: decide
-        run: |
-          STATE="${{ steps.check-state.outputs.WORKFLOW_STATE }}"
-
-          if [ "$STATE" = "disabled_manually" ] || [ "$STATE" = "disabled_inactivity" ]; then
-            echo "action=enable" >> $GITHUB_OUTPUT
-            echo "Workflow is disabled ($STATE) - will be enabled"
-          elif [ "$STATE" = "active" ]; then
-            echo "action=skip" >> $GITHUB_OUTPUT
-            echo "Workflow is already active"
-          else
-            echo "action=skip" >> $GITHUB_OUTPUT
-            echo "Unknown state ($STATE) - skipping"
-          fi
-
-      - name: Enable workflow if needed
-        if: steps.decide.outputs.action == 'enable'
-        run: |
-          set -e
-          echo "Enabling workflow..."
-          gh workflow enable ".github/workflows/scheduled-wip-monitor.yml" -R "${{ github.repository }}"
-          echo "Workflow enabled successfully"
-
-      - name: Summary
-        run: |
-          echo "### Scheduled WIP Monitor" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **State found**: \`${{ steps.check-state.outputs.WORKFLOW_STATE }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Action taken**: \`${{ steps.decide.outputs.action }}\`" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ steps.decide.outputs.action }}" = "enable" ]; then
-            echo "- **Result**: Workflow enabled and monitoring WIP issues" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- **Result**: No action needed" >> $GITHUB_STEP_SUMMARY
-          fi

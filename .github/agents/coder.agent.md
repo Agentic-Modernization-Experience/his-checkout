@@ -1,18 +1,18 @@
 ---
 name: Coder
 description: Writes code for complex, cross-cutting, or high-risk changes.
-model: GPT-5.3-Codex (copilot)
+model: Claude Opus 4.6 (copilot)
 user-invocable: false
 disable-model-invocation: true
 tools: [
    vscode,
    execute,
    read,
-   github/*,
    edit,
    search,
    web,
    todo,
+   github/*,
    sequential-thinking/*
 ]
 agents: []
@@ -63,15 +63,17 @@ If the Orchestrator delegates a **Terminal Preflight**:
 ## Memory Boundary (Mandatory)
 
 1. Do NOT use any implicit/chat "memory" feature to store project context.
-2. Persisted project knowledge lives only in `.agent-memory/` files and must follow `@skills/memory-management/SKILL.md`.
+2. Persisted project knowledge lives in `.agent-memory/topics/` files, indexed by `.agent-memory/INDEX.md`, and must follow `@skills/memory-management/SKILL.md`. Memory is best known context — verify critical facts against the codebase before relying on them.
 3. You may update `.agent-memory/` in either case:
    - The Orchestrator explicitly authorizes it (e.g., `ALLOW_MEMORY_UPDATE=true`), OR
    - You completed and verified a non-trivial change that matches any Step 8 trigger (feature/behavior change, bug fix with repro, refactor/`>=2` files, CI/deps change, new invariant/decision, recurring error pattern).
 4. If you update memory:
    - use `@skills/memory-management/SKILL.md`
-   - append (don’t rewrite history)
-   - include `Reason`, `Facts`, `Citations` (file paths), and `memory_meta` (timestamp, author)
-   - verify by reading back the updated file and include: `Memory Transaction Successful: <reason>`.
+   - write the topic file in `.agent-memory/topics/<topic-id>.md` first
+   - then update `.agent-memory/INDEX.md` with the pointer entry
+   - never update the index without a corresponding topic file
+   - include `Reason`, `Facts`, `Citations` (file paths), and `memory_meta` (timestamp, author, confidence, last_verified)
+   - verify by reading back both the topic file and INDEX.md: `Memory Transaction Successful: <reason>`.
 5. If you do NOT update memory, include a short `Memory Candidate` section (2–6 bullets).
 
 ## Output Contract (Mandatory)

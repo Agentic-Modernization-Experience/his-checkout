@@ -18,15 +18,15 @@
   "project_status_field": "Status",
   "project_status_values": {
     "backlog": "Backlog",
-    "ready": "Ready",
     "in progress": "In progress",
     "in review": "In review",
     "done": "Done"
   },
-  "human_reviewers": ["guilherme-coletaro", "leandro-canabarro"],
+  "human_reviewers": ["guilherme-coleta", "leandro-canabarro"],
   "wip_timeout_hours": 24,
   "template_profile": "checkout",
   "sync_labels": true,
+  "sync_milestones": true,
   "create_first_issue": true,
   "template_vars": {
     "CHECKOUT_MODE": "hosted",

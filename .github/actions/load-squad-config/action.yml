@@ -74,6 +74,9 @@ outputs:
   sync_labels:
     description: 'Whether to sync labels during bootstrap (default: true)'
     value: ${{ steps.load.outputs.sync_labels }}
+  sync_milestones:
+    description: 'Whether to sync milestones during bootstrap (default: true)'
+    value: ${{ steps.load.outputs.sync_milestones }}
   create_first_issue:
     description: 'Whether to create the first phase issue during bootstrap (default: true)'
     value: ${{ steps.load.outputs.create_first_issue }}
@@ -110,7 +113,21 @@ runs:
         exit 1
       fi
 
-      echo "org_login=$(jq -r '.org_login' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      # Validate project_number is a positive integer
+      PROJECT_NUM=$(jq -r '.project_number' "$CONFIG_PATH")
+      if ! [[ "$PROJECT_NUM" =~ ^[1-9][0-9]*$ ]]; then
+        echo "::error::project_number must be a positive integer, got: $PROJECT_NUM"
+        exit 1
+      fi
+
+      # Validate org_login matches GitHub org/user pattern
+      ORG_LOGIN=$(jq -r '.org_login' "$CONFIG_PATH")
+      if ! [[ "$ORG_LOGIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]; then
+        echo "::error::org_login contains invalid characters: $ORG_LOGIN (must be alphanumeric with optional hyphens)"
+        exit 1
+      fi
+
+      echo "org_login=$ORG_LOGIN" >> $GITHUB_OUTPUT
       echo "project_number=$(jq -r '.project_number' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
       echo "project_url=$(jq -r '.project_url' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
       # Knowledge base (unified)
@@ -145,9 +162,17 @@ runs:
       echo "status_review=$STATUS_REVIEW" >> $GITHUB_OUTPUT
       echo "status_done=$(jq -r '.project_status_values.done // "Done"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
       echo "wip_timeout_hours=$(jq -r '.wip_timeout_hours // 24' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
-      echo "template_profile=$(jq -r '.template_profile // "default"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      TEMPLATE_PROFILE=$(jq -r '.template_profile // "default"' "$CONFIG_PATH")
+      echo "template_profile=$TEMPLATE_PROFILE" >> $GITHUB_OUTPUT
       echo "template_vars=$(jq -c '.template_vars // {}' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
 
-      echo "sync_labels=$(jq -r '.sync_labels // "true"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
-      echo "create_first_issue=$(jq -r '.create_first_issue // "true"' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      # Warn if template profile directory does not exist locally
+      TEMPLATE_DIR=".github/templates/$TEMPLATE_PROFILE"
+      if [[ ! -d "$TEMPLATE_DIR" ]]; then
+        echo "::warning::Template profile directory not found: $TEMPLATE_DIR (may be expected for remote usage)"
+      fi
+
+      echo "sync_labels=$(jq -r 'if has("sync_labels") then .sync_labels else true end' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "sync_milestones=$(jq -r 'if has("sync_milestones") then .sync_milestones else true end' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
+      echo "create_first_issue=$(jq -r 'if has("create_first_issue") then .create_first_issue else true end' "$CONFIG_PATH")" >> $GITHUB_OUTPUT
       echo "workspaces=$(jq -c '.workspaces // {}' "$CONFIG_PATH")" >> $GITHUB_OUTPUT

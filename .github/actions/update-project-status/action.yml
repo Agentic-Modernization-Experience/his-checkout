@@ -40,13 +40,15 @@ runs:
       TARGET_STATUS: ${{ inputs.status }}
       STATUS_FIELD: ${{ inputs.status_field }}
     run: |
+      set -e
+
       # Optimized query - direct lookup by issueId
-      PROJECT_QUERY=$(cat <<GRAPHQL
-      query(\$org: String!, \$number: Int!, \$issueId: ID!) {
-        organization(login: \$org) {
-          projectV2(number: \$number) {
+      PROJECT_QUERY=$(cat <<'GRAPHQL'
+      query($org: String!, $number: Int!, $issueId: ID!, $fieldName: String!) {
+        organization(login: $org) {
+          projectV2(number: $number) {
             id
-            field(name: "$STATUS_FIELD") {
+            field(name: $fieldName) {
               ... on ProjectV2SingleSelectField {
                 id
                 options {
@@ -57,7 +59,7 @@ runs:
             }
           }
         }
-        node(id: \$issueId) {
+        node(id: $issueId) {
           ... on Issue {
             projectItems(first: 10) {
               nodes {
@@ -78,11 +80,33 @@ runs:
         -f query="$PROJECT_QUERY" \
         -f org="$ORG_LOGIN" \
         -F number="$PROJECT_NUMBER" \
-        -f issueId="$ISSUE_ID")
+        -f issueId="$ISSUE_ID" \
+        -f fieldName="$STATUS_FIELD")
+
+      # Check for API errors
+      API_ERRORS=$(echo "$RESULT" | jq -r '.errors // empty')
+      if [ -n "$API_ERRORS" ] && [ "$API_ERRORS" != "null" ]; then
+        echo "GraphQL error: $API_ERRORS"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
 
       # Extract IDs using jq
       PROJECT_ID=$(echo "$RESULT" | jq -r '.data.organization.projectV2.id')
+
+      if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+        echo "Project #$PROJECT_NUMBER not found in organization '$ORG_LOGIN'"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
+
       STATUS_FIELD_ID=$(echo "$RESULT" | jq -r '.data.organization.projectV2.field.id')
+
+      if [ -z "$STATUS_FIELD_ID" ] || [ "$STATUS_FIELD_ID" = "null" ]; then
+        echo "Status field '$STATUS_FIELD' not found in project #$PROJECT_NUMBER"
+        echo "success=false" >> $GITHUB_OUTPUT
+        exit 0
+      fi
 
       # Find the project item
       PROJECT_ITEM_ID=$(echo "$RESULT" | jq -r \
@@ -144,7 +168,3 @@ runs:
       echo "Issue status updated to '$TARGET_STATUS'"
       echo "success=true" >> $GITHUB_OUTPUT
       echo "project_item_id=$PROJECT_ITEM_ID" >> $GITHUB_OUTPUT
-
-branding:
-  icon: 'check-circle'
-  color: 'green'

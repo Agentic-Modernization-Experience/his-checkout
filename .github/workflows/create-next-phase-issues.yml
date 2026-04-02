@@ -34,7 +34,7 @@ jobs:
       template_vars: ${{ steps.config.outputs.template_vars }}
       workspaces: ${{ steps.config.outputs.workspaces }}
       trigger_label: ${{ steps.config.outputs.trigger_label }}
-      milestone_map: ${{ steps.sync-milestones.outputs.milestone_map }}
+      milestone_map: ${{ steps.sync-milestones.outputs.milestone_map || '{}' }}
 
     steps:
       - name: Checkout Repository
@@ -64,7 +64,7 @@ jobs:
 
       - name: Sync milestones
         id: sync-milestones
-        if: steps.check-trigger.outputs.has_trigger == 'true'
+        if: steps.check-trigger.outputs.has_trigger == 'true' && steps.config.outputs.sync_milestones == 'true'
         uses: ./.github/actions/sync-milestones
         with:
           milestones-file: .github/templates/${{ steps.config.outputs.template_profile }}/templates-mapping.json
@@ -151,7 +151,7 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            const { data: allIssues } = await github.rest.issues.listForRepo({
+            const allIssues = await github.paginate(github.rest.issues.listForRepo, {
               owner,
               repo,
               state: 'all',
@@ -200,7 +200,12 @@ jobs:
                     issue.labels.some(label => label.name === depLabel)
                   );
 
-                  if (!depIssue || depIssue.state !== 'closed') {
+                  if (!depIssue) {
+                    console.log(`Warning: Dependency phase '${depId}' was never created - treating as skipped`);
+                    continue;
+                  }
+
+                  if (depIssue.state !== 'closed') {
                     console.log(`Dependency ${depId} not met for ${nextPhase.id}`);
                     allDependenciesMet = false;
                     break;
@@ -313,6 +318,8 @@ jobs:
 
                 let body = fs.readFileSync(templatePath, 'utf8');
 
+                body = body.replace(/\r\n/g, '\n');
+
                 // Strip YAML frontmatter (--- ... ---) added for GitHub issue template chooser
                 if (body.startsWith('---\n')) {
                   const endIndex = body.indexOf('\n---\n', 4);
@@ -372,12 +379,16 @@ jobs:
                     }
                   }
                 } catch (e) {
-                  console.log('Warning: Could not parse workspaces config');
+                  console.log(`Warning: Could not parse workspaces config: ${e.message}`);
                 }
 
                 // Merge custom template_vars (from squad-config.json)
                 let customVars = {};
-                try { customVars = JSON.parse(process.env.TEMPLATE_VARS || '{}'); } catch (e) {}
+                try {
+                  customVars = JSON.parse(process.env.TEMPLATE_VARS || '{}');
+                } catch (e) {
+                  console.log(`Warning: Could not parse TEMPLATE_VARS: ${e.message}`);
+                }
                 const allVars = { ...builtInVars, ...customVars };
 
                 // Replace all {{PLACEHOLDER}} occurrences
@@ -408,6 +419,27 @@ jobs:
                   }
                 } catch (e) {
                   console.log('Warning: Could not parse milestone map');
+                }
+
+                // Idempotency check: skip if phase issue already exists
+                const { data: existingIssues } = await github.rest.issues.listForRepo({
+                  owner,
+                  repo,
+                  state: 'all',
+                  labels: issueLabels.join(','),
+                  per_page: 1
+                });
+
+                if (existingIssues.length > 0) {
+                  console.log(`Phase issue already exists: #${existingIssues[0].number}`);
+                  results.push({
+                    template: template.id,
+                    phase: template.phase,
+                    status: 'skipped',
+                    reason: 'already exists',
+                    issue_number: existingIssues[0].number
+                  });
+                  continue;
                 }
 
                 // Create the issue

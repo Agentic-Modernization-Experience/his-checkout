@@ -9,7 +9,6 @@ permissions:
   contents: read
   issues: write
   pull-requests: read
-  actions: write
 
 concurrency:
   group: scheduled-wip-monitor
@@ -89,44 +88,6 @@ jobs:
           else
             echo "#### No WIP issues found" >> $GITHUB_STEP_SUMMARY
           fi
-
-  disable-workflow-when-no-wip:
-    needs: check-wip-issues
-    if: needs.check-wip-issues.outputs.has_issues == 'false'
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.HIS_TOKEN }}
-    timeout-minutes: 5
-
-    steps:
-      - name: Disable workflow schedule when no WIP issues remain
-        id: disable
-        run: |
-          echo "No WIP issues found - disabling workflow..."
-
-          # Get the workflow file name from the workflow path
-          # github.workflow_ref format: owner/repo/.github/workflows/file.yml@refs/heads/branch
-          WORKFLOW_FILE=$(echo "${{ github.workflow_ref }}" | cut -d'@' -f1 | sed 's|.*/||')
-          echo "Workflow file: $WORKFLOW_FILE"
-
-          # Export to GITHUB_OUTPUT for use in summary
-          echo "workflow_file=$WORKFLOW_FILE" >> $GITHUB_OUTPUT
-
-          # Use GitHub CLI to disable the workflow (official method)
-          gh workflow disable "$WORKFLOW_FILE" -R "${{ github.repository }}"
-
-          echo "Workflow disabled successfully"
-          echo "To re-enable: gh workflow enable \"$WORKFLOW_FILE\" -R \"${{ github.repository }}\""
-
-      - name: Summary
-        run: |
-          echo "### Workflow Auto-Disabled" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Reason**: No WIP issues found" >> $GITHUB_STEP_SUMMARY
-          echo "- **Action**: Workflow disabled via GitHub CLI" >> $GITHUB_STEP_SUMMARY
-          echo "- **Workflow File**: ${{ steps.disable.outputs.workflow_file }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Re-enable**: \`gh workflow enable ${{ steps.disable.outputs.workflow_file }} -R ${{ github.repository }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Alternative**: Enable via GitHub UI (Actions tab → Workflow → Enable)" >> $GITHUB_STEP_SUMMARY
 
   finalize:
     needs: [load-config, check-wip-issues]

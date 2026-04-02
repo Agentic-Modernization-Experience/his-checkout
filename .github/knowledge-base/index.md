@@ -7,28 +7,16 @@ Agents and workflows reference this directory via the `knowledge_base` field in 
 
 ## Structure
 
+Organize documentation by domain area. Suggested structure:
+
 ```
 knowledge-base/
-├── index.md                          # This file — overview and navigation
-└── security/                         # Phase 2 — Security & Compliance deliverables
-    ├── security-model.md             # Threat boundaries, controls, and trust assumptions
-    ├── pci-compliance.md             # PCI DSS scope, SAQ-A assumptions, and controls summary
-    ├── data-classification.md        # Sensitive-field handling, masking, and retention rules
-    ├── secret-handling.md            # Storage, access control, and rotation policy
-    ├── webhook-verification.md       # Stripe webhook signature validation and deduplication
-    └── fraud-controls.md             # Abuse prevention, velocity controls, and monitoring
+├── index.md                  # This file — overview and navigation
+├── architecture/             # System architecture and design decisions
+├── business-rules/           # Business logic documentation
+├── decisions/                # Key decisions, trade-offs, and rationale
+└── patterns/                 # Coding patterns, conventions, best practices
 ```
-
-## Phase 2 — Security & Compliance
-
-| Document | Description |
-|---|---|
-| [security-model.md](security/security-model.md) | Trust boundaries, threat model, and security controls for checkout payments |
-| [pci-compliance.md](security/pci-compliance.md) | PCI DSS SAQ-A scope definition, tokenization approach, and compliance checklist |
-| [data-classification.md](security/data-classification.md) | Field-level classification, masking patterns, and retention rules |
-| [secret-handling.md](security/secret-handling.md) | Stripe key storage, environment segregation, and rotation policy |
-| [webhook-verification.md](security/webhook-verification.md) | Stripe webhook signature verification and event deduplication policy |
-| [fraud-controls.md](security/fraud-controls.md) | Velocity controls, audit logging, and incident response runbook |
 
 ## Usage
 
