@@ -96,6 +96,7 @@ CREATE INDEX idx_stripe_events_received_at ON stripe_processed_events (received_
 | `payment_intent.canceled` | Mark order `cancelled` | Stripe-initiated or backend-initiated cancellation |
 | `charge.refunded` | Transition payment to `refunded` (full or partial) | Post-capture refund |
 | `charge.dispute.created` | Flag order for dispute review; freeze refund eligibility | Chargeback path |
+| `charge.dispute.closed` | Resolve dispute outcome; restore order if won, finalize refund if lost | Dispute resolution |
 
 ### Events Explicitly Ignored
 
