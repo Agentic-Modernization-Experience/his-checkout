@@ -17,6 +17,19 @@ Use this profile when your initiative requires end-to-end checkout delivery, fro
 7. **Phase 6**: Testing & Payment Simulation
 8. **Phase 7**: Observability & Release Readiness
 
+## Dependency validation
+
+The active checkout profile currently defines **15 total dependencies** across the 8 phases in `templates-mapping.json`.
+
+- discovery-and-requirements: 0
+- checkout-ux-and-flow-design: 1
+- security-and-compliance: 1
+- gateway-and-api-contracts: 2
+- backend-payment-orchestration: 2
+- frontend-checkout-implementation: 3
+- testing-and-payment-simulation: 3
+- observability-and-release-readiness: 3
+
 ## How to activate
 
 Update your `squad-config.json`:
