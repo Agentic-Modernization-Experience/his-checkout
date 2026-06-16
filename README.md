@@ -223,6 +223,17 @@ If a WIP issue has no completed Copilot workflow after `wip_timeout_hours` (defa
 | Fix a bug | `bugfix` | `bugfix` |
 | Generic / custom | `default` | your choice |
 
+## External Dependencies
+
+This project relies on **4 external GitHub Actions**:
+
+| Action | Version | Used In |
+|--------|---------|---------|
+| [`actions/checkout`](https://github.com/actions/checkout) | `v4` | All workflows |
+| [`actions/github-script`](https://github.com/actions/github-script) | `v7` | Most workflows |
+| [`actions/upload-artifact`](https://github.com/actions/upload-artifact) | `v4` | `export-completion-report.yml` |
+| [`stefanzweifel/git-auto-commit-action`](https://github.com/stefanzweifel/git-auto-commit-action) | `v5` | `bootstrap-squad.yml` |
+
 ## Actions Reference
 
 | Action | Purpose |
